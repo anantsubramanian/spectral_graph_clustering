@@ -27,20 +27,29 @@
 <h2>
 <a id="summary" class="anchor" href="#summary" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>Summary</h2>
 
-<p>We intend to implement a hybrid MPI + CUDA algorithm to perform spectral clustering of an input graph. We will test the algorithm against a sequential MATLAB implementation and a parallel single-GPU CUDA implementation using one (or more) of the SNAP data sets on two fronts: quality and overall computation time. We may use more precise measurements to support our claims and verify our hypotheses.</p>
+<p>We intend to implement a hybrid MPI + CUDA algorithm to perform spectral clustering of an input graph. We will test the algorithm against a sequential MATLAB implementation and a parallel single-GPU CUDA implementation using one (or more) of the SNAP<a href="#Xsnapnets"><sup>[1]</sup></a> data sets on two fronts: quality and overall computation time. We may use more precise measurements to support our claims and verify our hypotheses.</p>
 
 <h2>
 <a id="background" class="anchor" href="#background" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>Background</h2>
 
-<p>Given an undirected similarity graph , a clustering of the graph is an assignment of vertices  to clusters  such that a particular cost metric on the similarities  over the clusters  is minimized.</p>
+<p>Given an undirected similarity graph G = (V,W,E), a clustering of the graph is an assignment of vertices v<sub>i</sub>, ∀i ∈ {1,2,...,|V|} to clusters c<sub>j</sub>, ∀j ∈{1,2,...,|C|} such that a particular <i>cost metric</i> on the similarities W over the clusters is minimized.</p>
 
-<p>A normalized cut of a graph is a partition of the graph into two partitions  and  such that the sum of the weights of the edges connecting vertices in  to those in  is the minimum of all possible partitions and the size of  and  are similar.</p>
+<p>A <i>normalized cut</i> of a graph is a partition of the graph into two partitions A and B such that the sum of the weights of the edges connecting vertices in A to those in B is the minimum of all possible partitions <i>and</i> the size of A and B are similar.</p>
+
+<p><img src="normalized_cut.png" alt=""></p>
+
+<p>where</p>
+
+<p><img src="degree_def.png" alt=""></p>
 
 <p>Since this problem is NP-hard in nature, the approach of spectral clustering attempts to relax the constraints of the normalized cut and approximate the normalized cut using graph Laplacians.</p>
 
-<p>Without diving into the mathematical details (see  for more details), the problem reduces to that of constructing the graph Laplacian (or the normalized graph Laplacian)</p>
+<p>Without diving into the mathematical details (see <a href="#Xspectutorial">[2]</a>, <a href="#Xclustering">[3]</a>, <a href="#Xngspectral">[4]</a> for more details), the problem reduces to that of constructing the graph Laplacian (or the normalized graph Laplacian)</p>
 
-<p>And computing the two partitions using the second-smallest eigen value corresponding to one of the two Laplacian matrices. One popular method for computing the eigen values is using the Lanczos  algorithm, which involves iterative matrix-vector and vector-vector computations.</p>
+<p><b>&emsp;L = D - A</b> &emsp;&emsp;&emsp;&emsp;&emsp;(<b>D</b> = Diagonal Degree Matrix, <b>A</b> = Affinity Matrix)</p>
+<p><b>&emsp;L</b><sup><i>norm</i></sup> = <b>I - D</b><sup>-1/2</sup><b>AD</b><sup>1/2</sup></p>
+
+<p>And computing the two partitions using the second-smallest eigen value corresponding to one of the two Laplacian matrices. One popular method for computing the eigen values is using the Lanczos <a href="#Xlanczos">[5]</a> algorithm, which involves iterative matrix-vector and vector-vector computations.</p>
 
 <p>Therefore, from an engineering standpoint, spectral graph clustering algorithms reduce to steps of matrix operations.</p>
 
@@ -54,20 +63,54 @@
 <a id="challenges" class="anchor" href="#challenges" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>Challenges</h2>
 
 <ul>
-<li>Spectral clustering is mathematically complex. It would take us time to understand the mathematics well enough to argue about the correctness of our results. This is not just from a purely mathematical perspective, but also from a systems point of view, as we are also limited by the numerical precision that our systems have to offer.</li>
-<li>Since we are using a hybrid parallelization approach, there will potentially be a lot of communication overhead. It is not easy to see why this might work until we have explored the best possible ways to reduce the communication overhead. We could potentially compute and store data that doesn't change once at the beginning of the algorithm, but we might then be limited by the available memory.
-For a GPU on a single cluster node, we can view the data as being stored in a NUMA system:
-Device Memory  Main Memory  Other Node's Main Memory  Other Node's Device Memory.
+<li>Spectral clustering is <b>mathematically complex</b>. It would take us time to understand the mathematics well enough to argue about the correctness of our results. This is not just from a purely mathematical perspective, but also from a systems point of view, as we are also limited by the numerical precision that our systems have to offer.</li>
+<li>Since we are using a hybrid parallelization approach, there will potentially be a <b>lot of communication overhead</b>. It is not easy to see why this might work until we have explored the best possible ways to reduce the communication overhead. We could potentially compute and store data that doesn't change once at the beginning of the algorithm, but we might then be limited by the available memory.</li>
+<li>For a GPU on a single cluster node, we can view the data as being stored in a <b>NUMA</b> system:
+Device Memory → Main Memory → Other Node's Main Memory → Other Node's Device Memory.
 We might have to explore concepts such as pre-fetching/latency hiding/pipelining to improve performance.</li>
-<li>There are a lot of possible parallel approaches that we could explore. We could attempt to perform different steps of the algorithm in parallel, or we could operate in parallel on different parts of the data for the same algorithm step. For matrix operations, we could explore row-distributed representations, column-distributed representations, 2D-distributed representations, etc. We would have to narrow down on the best working approach fast enough to have enough time to refine it.</li>
-<li>Since we are attempting to get two different frameworks to work together, we might run into unforeseen issues in getting MPI and CUDA to work well together. We would have to work with a CUDA-aware version of MPI .</li>
-<li>If we are operating on sparse graph data sets, we would have to look into sparse matrix representations and tune our operations to perform well on these sparse representations. If data partitioning is not implemented correctly, we could potentially run into load balancing and gang skew issues as well.</li>
+<li>There are a <b>lot of possible parallel approaches</b> that we could explore. We could attempt to perform different steps of the algorithm in parallel, or we could operate in parallel on different parts of the data for the same algorithm step. For matrix operations, we could explore row-distributed representations, column-distributed representations, 2D-distributed representations, etc. We would have to narrow down on the best working approach fast enough to have enough time to refine it.</li>
+<li>Since we are <b>attempting to get two different frameworks to work together</b>, we might run into unforeseen issues in getting MPI and CUDA to work well together. We would have to work with a CUDA-aware version of MPI <a href="#Xcudaawarempi">[6]</a>.</li>
+<li>If we are operating on <b>sparse graph data sets</b>, we would have to look into sparse matrix representations and tune our operations to perform well on these sparse representations. If data partitioning is not implemented correctly, we could potentially run into load balancing and gang skew issues as well.</li>
 </ul>
 
 <h2>
 <a id="resources" class="anchor" href="#resources" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>Resources</h2>
 
-<p>We will be using a couple of papers to help us get familiar with the mathematical theory of spectral clustering, as well as sequential implementations of the same. We would also be referring to previous (non-hybrid) parallel implementations of parts of the algorithm, such as graph construction and eigen value computation.</p>
+<p>We will be using a couple of papers to help us get familiar with the mathematical theory of spectral clustering, as well as sequential implementations of the same. We would also be referring to previous (non-hybrid) parallel implementations of parts of the algorithm, such as graph construction and eigen value computation. We have outlined these below.</p>
+
+<ul>
+<li>A CUDA-only parallel implementation of the Lanczos algorithm <a href="#X418project">[7]</a>.
+</li>
+<li>Mathematical theory of variants of the Lanczos algorithm <a href="#Xlanczos">[5]</a>.
+</li>
+<li>A tutorial on the mathematical theory of spectral clustering <a href="#Xspectutorial">[2]</a>.
+</li>
+<li>More papers on the mathematics of Spectral Clustering <a 
+href="#Xngspectral">[4]</a>,&#x00A0;<a 
+href="#Xclustering">[3]</a>.
+</li>
+<li>Approximate, fast Spectral Clustering algorithms <a 
+href="#Xlandmark">[8]</a>,&#x00A0;<a 
+href="#Xapproximate">[9]</a>.
+</li>
+<li>Spectral Clustering for community detection in large graphs <a href="#Xcommunities">[10]</a>.
+</li>
+<li>Using CUDA to accelerate spectral graph analysis <a 
+href="#Xcudaspec">[11]</a>.
+</li>
+<li>An introduction to CUDA-Aware MPI <a href="#Xcudaawarempi">[6]</a>.
+</li>
+<li>An efficient serial MATLAB implementation of Spectral Graph Clustering <a href="#Xmatlabspectral">[12]</a>.
+</li>
+<li>A Scikit-lean Python implementation of Spectral Clustering <a href="#Xscikit">[13]</a>.
+</li>
+<li>A parallel K-Means clustering algorithm with MPI <a href="#Xmpikmeans">[14]</a>.
+</li>
+<li>A paper on Spectral Clustering in distributed systems <a href="#Xdistributedspec">[15]</a>.
+</li>
+<li>The Stanford Network Analysis Project <a href="#Xsnapnets">[1]</a>.
+</li>
+</ul>
 
 <h2>
 <a id="goals-and-deliverables" class="anchor" href="#goals-and-deliverables" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>Goals and Deliverables</h2>
@@ -75,18 +118,20 @@ We might have to explore concepts such as pre-fetching/latency hiding/pipelining
 <h3>
 <a id="plan-to-achieve" class="anchor" href="#plan-to-achieve" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>Plan to Achieve</h3>
 
-<p>We will have a working, correct implementation of a C++ hybrid MPI + CUDA parallel version of a Spectral Clustering algorithm as a miniature library. We expect the quality of the results produced by our algorithm to be comparable   to those produced by a sequential version of the algorithm.</p>
+<p>We will have a working, correct implementation of a C++ hybrid MPI + CUDA parallel version of a Spectral Clustering algorithm as a miniature library. We expect the quality of the results produced by our algorithm to be comparable<a href="#comparableNote"><sup>†</sup></a> to those produced by a sequential version of the algorithm.</p>
 
-<p>The previous CUDA-only implementation  achieved 5x speedup over a sequential MATLAB version. Pessimistically, we expect to achieve at least 5x speedup over the sequential MATLAB version as well, but on larger data sets (as we have more total memory and compute power available to us).</p>
+<p>The previous CUDA-only implementation<a href="#X418project"><sup>[7]</sup></a> achieved 5x speedup over a sequential MATLAB version. Pessimistically, we expect to achieve at least <b>5x</b> speedup over the sequential MATLAB version as well, but on larger data sets (as we have more total memory and compute power available to us).</p>
 
 <p>We will also compare our code with MPI-only (if available) and CUDA-only parallel implementations of the algorithm, and hope to stay competitive.  We anticipate two major bottlenecks in our code: inter-node communication overhead in MPI and CUDA host memory to device memory transfer overhead. We will spend a significant amount of time optimizing and analyzing these two.</p>
 
 <p>For the poster session, we will show a visualization of our speedup graphs, and discuss the parallelization approaches and trade-offs that we made. We will also show the interface to the library, the API structure and the easy of use of our code.</p>
 
+<a id="comparableNote"></a><p><small><sup>†</sup>&ensp;If we do decide to trade quality for speedup, we will make sure to document and bound the error in our algorithm.</small></p>
+
 <h3>
 <a id="hope-to-achieve" class="anchor" href="#hope-to-achieve" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>Hope to Achieve</h3>
 
-<p>We hope to achieve at least (5 + 0.5 * number of nodes)x speedup on two data sets. The reason is that we expect the algorithm to scale with the number of nodes as well, providing more speedup than the 5x speedup obtained using the CUDA-only implementation. However, we anticipate non-ideal speedup and limit ourselves to a more achievable goal of 0.5 * number of nodes.</p>
+<p>We hope to achieve at least <b>(5 + 0.5 * number of nodes)x</b> speedup on two data sets. The reason is that we expect the algorithm to scale with the number of nodes as well, providing more speedup than the 5x speedup obtained using the CUDA-only implementation. However, we anticipate non-ideal speedup and limit ourselves to a more achievable goal of 0.5 * number of nodes.</p>
 
 <p>Further, if our project goes better than expected, we will test against a few more data sets (with varying degrees of sparsity) and study the scaling characteristics of our code on these data sets. In the best case scenario, we would also perform isolated testing on AWS machines or on different GPUs to analyze the variability in our results.</p>
 
@@ -154,6 +199,134 @@ We might have to explore concepts such as pre-fetching/latency hiding/pipelining
 </tbody>
 </table>
 
+<h2>
+<a id="references" class="anchor" href="#references" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>References</h2>
+
+  <p class="noindent" >
+  <div>
+  <p><span>[1]<span>&#x00A0;&#x00A0;&#x00A0;</span></span>
+  <a id="Xsnapnets"></a>Jure Leskovec and Andrej Krevl. SNAP Datasets: Stanford large network dataset collection.
+  <a href="http://snap.stanford.edu/data" class="url"><span class="pcrr7t-x-x-120">http://snap.stanford.edu/data</span></a>, June 2014.</p>
+
+  <p><span>
+  [2]<span>&#x00A0;&#x00A0;&#x00A0;</span></span><a 
+  id="Xspectutorial"></a>Ulrike von Luxburg. A tutorial on spectral clustering. <span 
+  >Statistics and Computing</span>,
+  17(4):395&#8211;416, 2007.
+  </p>
+
+  <p><span>
+  [3]<span>&#x00A0;&#x00A0;&#x00A0;</span></span><a 
+  id="Xclustering"></a>Satu&#x00A0;Elisa Schaeffer.  Graph clustering.  <span 
+  >Computer Science Review</span>, 1(1):27&#8211;64,
+  2007.
+  </p>
+
+  <p><span>
+  [4]<span>&#x00A0;&#x00A0;&#x00A0;</span></span><a 
+  id="Xngspectral"></a>Andrew&#x00A0;Y.  Ng,  Michael&#x00A0;I.  Jordan,  and  Yair  Weiss.    On  spectral  clustering:
+  Analysis and an algorithm.  In <span 
+  >Advances In Neural Information Processing Systems</span>,
+  pages 849&#8211;856. MIT Press, 2001.
+  </p>
+
+  <p><span>
+  [5]<span>&#x00A0;&#x00A0;&#x00A0;</span></span><a 
+  id="Xlanczos"></a>Jane Cullum and Ralph&#x00A0;A. Willoughby.  A survey of lanczos procedures for very
+  large real &#8216;symmetric&#8217; eigenvalue problems.  <span 
+  >Journal of Computational and Applied</span>
+  <span 
+  >Mathematics</span>, 12:37 &#8211; 60, 1985.
+  </p>
+
+  <p><span>
+  [6]<span>&#x00A0;&#x00A0;&#x00A0;</span></span><a 
+  id="Xcudaawarempi"></a>Jiri       Kraus.                  An       introduction       to       cuda-aware       mpi.
+  <a 
+  href="https://devblogs.nvidia.com/parallelforall/introduction-cuda-aware-mpi/" class="url" ><span 
+  class="pcrr7t-x-x-120">https://devblogs.nvidia.com/parallelforall/introduction-cuda-aware-mpi/</span></a>.
+  Published: 2013-03-13.
+  </p>
+
+  <p><span>
+  [7]<span>&#x00A0;&#x00A0;&#x00A0;</span></span><a 
+  id="X418project"></a>Parallel      eigensolver      for      graph      spectral      analysis      on      gpu.
+  <a 
+  href="http://linhr.me/15618/" class="url" ><span 
+  class="pcrr7t-x-x-120">http://linhr.me/15618/</span></a>. Accessed: 2016-10-31.
+  </p>
+
+  <p><span>
+  [8]<span>&#x00A0;&#x00A0;&#x00A0;</span></span><a 
+  id="Xlandmark"></a>Xinlei Chen and Deng Cai.  Large scale spectral clustering with landmark-based
+  representation. In <span 
+  >AAAI</span>, 2011.
+  </p>
+
+  <p><span>
+  [9]<span>&#x00A0;&#x00A0;&#x00A0;</span></span><a 
+  id="Xapproximate"></a>Donghui Yan, Ling Huang, and Michael&#x00A0;I. Jordan.   Fast approximate spectral
+  clustering.  In <span 
+  >Proceedings of the 15th ACM SIGKDD International Conference on</span>
+  <span 
+  >Knowledge Discovery and Data Mining</span>, KDD &#8217;09, pages 907&#8211;916, New York, NY,
+  USA, 2009. ACM.
+  </p>
+
+  <p><span>
+  [10]<span>&#x00A0;&#x00A0;&#x00A0;</span></span><a 
+  id="Xcommunities"></a>Scott White and Padhraic Smyth.  <span 
+  >A Spectral Clustering Approach To Finding</span>
+  <span 
+  >Communities in Graphs</span>, pages 274&#8211;285.
+  </p>
+
+  <p><span>
+  [11]<span>&#x00A0;&#x00A0;&#x00A0;</span></span><a 
+  id="Xcudaspec"></a>Maxim Naumov. Fast spectral graph partitioning on gpus. Nvidia Developer Blog:
+  <a 
+  href="https://devblogs.nvidia.com/parallelforall/fast-spectral-graph-partitioning-gpus/" class="url" ><span 
+  class="pcrr7t-x-x-120">https://devblogs.nvidia.com/parallelforall/fast-spectral-graph-partitioning-gpus/</span></a>.
+  Published: 2016-05-12.
+  </p>
+
+  <p><span>
+  [12]<span>&#x00A0;&#x00A0;&#x00A0;</span></span><a 
+  id="Xmatlabspectral"></a>Fast  and  efficient  spectral  clustering  in  matlab.   Mathworks  Tutorial  Article:
+  <a 
+  href="https://www.mathworks.com/matlabcentral/fileexchange/34412-fast-and-efficient-spectral-clustering" class="url" ><span 
+  class="pcrr7t-x-x-120">https://www.mathworks.com/matlabcentral/fileexchange/34412-fast-and-efficient-spectral-clustering</span></a>.
+  Accessed: 2016-10-31.
+  </p>
+
+  <p><span>
+  [13]<span>&#x00A0;&#x00A0;&#x00A0;</span></span><a 
+  id="Xscikit"></a>Clustering                                    using                                    scikit-learn.
+  <a 
+  href="http://scikit-learn.org/stable/modules/clustering.html" class="url" ><span 
+  class="pcrr7t-x-x-120">http://scikit-learn.org/stable/modules/clustering.html</span></a>.
+  Accessed: 2016-10-31.
+  </p>
+
+  <p><span>
+  [14]<span>&#x00A0;&#x00A0;&#x00A0;</span></span><a 
+  id="Xmpikmeans"></a>J.&#x00A0;Zhang,  G.&#x00A0;Wu,  X.&#x00A0;Hu,  S.&#x00A0;Li,  and  S.&#x00A0;Hao.   A  parallel  k-means  clustering
+  algorithm  with  mpi.      In  <span 
+  >2011  Fourth  International  Symposium  on  Parallel</span>
+  <span 
+  >Architectures, Algorithms and Programming</span>, pages 60&#8211;64, Dec 2011.
+  </p>
+
+  <p><span>
+  [15]<span>&#x00A0;&#x00A0;&#x00A0;</span></span><a 
+  id="Xdistributedspec"></a>W.&#x00A0;Y. Chen, Y.&#x00A0;Song, H.&#x00A0;Bai, C.&#x00A0;J. Lin, and E.&#x00A0;Y. Chang.  Parallel spectral
+  clustering  in  distributed  systems.    <span 
+  >IEEE  Transactions  on  Pattern  Analysis  and</span>
+  <span 
+  >Machine Intelligence</span>, 33(3):568&#8211;586, March 2011.
+  </p>
+  </div>
+
       <footer class="site-footer">
         <span class="site-footer-owner"><a href="https://github.com/feroze/spectral_graph_clustering">Spectral graph clustering</a> is maintained by <a href="https://github.com/feroze">feroze</a>.</span>
 
@@ -161,7 +334,6 @@ We might have to explore concepts such as pre-fetching/latency hiding/pipelining
       </footer>
 
     </section>
-
   
   </body>
 </html>
