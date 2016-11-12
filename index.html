@@ -28,9 +28,23 @@
 <p>We intend to implement a hybrid MPI + CUDA algorithm to perform spectral clustering of an input graph. We will test the algorithm against a sequential MATLAB implementation and a parallel single-GPU CUDA implementation using one (or more) of the SNAP data sets on two fronts: quality and overall computation time. We may use more precise measurements to support our claims and verify our hypotheses.</p>
 
 <h2>
+<a id="challenges" class="anchor" href="#challenges" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>Challenges</h2>
+
+<ul>
+<li>Spectral clustering is mathematically complex. It would take us time to understand the mathematics well enough to argue about the correctness of our results. This is not just from a purely mathematical perspective, but also from a systems point of view, as we are also limited by the numerical precision that our systems have to offer.</li>
+<li>Since we are using a hybrid parallelization approach, there will potentially be a lot of communication overhead. It is not easy to see why this might work until we have explored the best possible ways to reduce the communication overhead. We could potentially compute and store data that doesn't change once at the beginning of the algorithm, but we might then be limited by the available memory.
+For a GPU on a single cluster node, we can view the data as being stored in a NUMA system:
+Device Memory  Main Memory  Other Node's Main Memory  Other Node's Device Memory.
+We might have to explore concepts such as pre-fetching/latency hiding/pipelining to improve performance.</li>
+<li>There are a lot of possible parallel approaches that we could explore. We could attempt to perform different steps of the algorithm in parallel, or we could operate in parallel on different parts of the data for the same algorithm step. For matrix operations, we could explore row-distributed representations, column-distributed representations, 2D-distributed representations, etc. We would have to narrow down on the best working approach fast enough to have enough time to refine it.</li>
+<li>Since we are attempting to get two different frameworks to work together, we might run into unforeseen issues in getting MPI and CUDA to work well together. We would have to work with a CUDA-aware version of MPI .</li>
+<li>If we are operating on sparse graph data sets, we would have to look into sparse matrix representations and tune our operations to perform well on these sparse representations. If data partitioning is not implemented correctly, we could potentially run into load balancing and gang skew issues as well.</li>
+</ul>
+
+<h2>
 <a id="resources" class="anchor" href="#resources" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>Resources</h2>
 
-<p>We will be using a couple of papers to help us get familiar with the mathematical theory of spectral clustering, as well as sequential implementations of the same. We would also be referring to previous (non-hybrid) parallel implementations of parts of the algorithm, such as graph construction and eigen value computation. We have outlined these below.</p>
+<p>We will be using a couple of papers to help us get familiar with the mathematical theory of spectral clustering, as well as sequential implementations of the same. We would also be referring to previous (non-hybrid) parallel implementations of parts of the algorithm, such as graph construction and eigen value computation.</p>
 
 <h2>
 <a id="goals-and-deliverables" class="anchor" href="#goals-and-deliverables" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>Goals and Deliverables</h2>
