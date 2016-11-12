@@ -38,7 +38,7 @@
 
 <p>Since this problem is NP-hard in nature, the approach of spectral clustering attempts to relax the constraints of the normalized cut and approximate the normalized cut using graph Laplacians.</p>
 
-<p>Without diving into the mathematical details (see  for more details), the problem reduces to that of constructing the graph Laplacian (or the normalized graph Laplacian)</p>
+<p>Without diving into the mathematical details (see PDF for more details), the problem reduces to that of constructing the graph Laplacian (or the normalized graph Laplacian).</p>
 
 <p>And computing the two partitions using the second-smallest eigen value corresponding to one of the two Laplacian matrices. One popular method for computing the eigen values is using the Lanczos  algorithm, which involves iterative matrix-vector and vector-vector computations.</p>
 
@@ -68,6 +68,8 @@ We might have to explore concepts such as pre-fetching/latency hiding/pipelining
 <a id="resources" class="anchor" href="#resources" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>Resources</h2>
 
 <p>We will be using a couple of papers to help us get familiar with the mathematical theory of spectral clustering, as well as sequential implementations of the same. We would also be referring to previous (non-hybrid) parallel implementations of parts of the algorithm, such as graph construction and eigen value computation.</p>
+
+<p>(See PDF for more details)</p>
 
 <h2>
 <a id="goals-and-deliverables" class="anchor" href="#goals-and-deliverables" aria-hidden="true"><span aria-hidden="true" class="octicon octicon-link"></span></a>Goals and Deliverables</h2>
