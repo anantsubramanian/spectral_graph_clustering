@@ -87,7 +87,8 @@ void distributed_graph<T>::construct_unnormalized_laplacian()
     {
       // If self loop is missing, push it into the array with degree D (as A[i][i] = 0)
       if ( col_idx[data_idx] > row_idx + row_start_idx &&
-           (vis.size() == 0 || vis[vis.size()-1] > vjs[vjs.size()-1] ) )
+           ( vis.size() == 0 || ( vis[vis.size()-1] != row_idx + row_start_idx ||
+                                  vis[vis.size()-1] > vjs[vjs.size()-1] ) ) )
       {
         vis.push_back(row_idx + row_start_idx);
         vjs.push_back(row_idx + row_start_idx);
@@ -134,8 +135,7 @@ void distributed_graph<T>::construct_unnormalized_laplacian()
     lap_nnz += rows_per_node - selfloop_count;
 
   // The number of elements added should match up with our estimate of nnz
-  // TODO: Check why these don't match
-  // assert(data.size() == lap_nnz);
+  assert(data.size() == lap_nnz);
 
   T* lap_A;
   int* lap_row_ptr;
