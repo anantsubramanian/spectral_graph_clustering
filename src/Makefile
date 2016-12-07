@@ -37,7 +37,5 @@ test_construction: test_construction.cpp graph.cpp utils.cpp headers/graph.hpp h
 
 clean:
 	rm lanczos_mpi_only_csr lanczos_mpi_only_csc test_construction lanczos_output_csr_1 \
-		lanczos_output_csr_8 lanczos_output_csc_1 lanczos_output_csc_8 2>/dev/null >/dev/null
-
-clear:
-	rm latedays.qsub.*
+		lanczos_output_csr_8 lanczos_output_csc_1 lanczos_output_csc_8 latedays.qsub.* \
+		*.o 2>/dev/null >/dev/null
