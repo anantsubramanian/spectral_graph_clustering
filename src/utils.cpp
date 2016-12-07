@@ -1,5 +1,6 @@
 #include "headers/utils.hpp"
 #include <vector>
+#include <cstring>
 
 using std::vector;
 
@@ -43,8 +44,8 @@ void convert_edgelist_to_csr ( vector<T> &data, vector<int> &vis, vector<int> &v
  * of size vec_size, and stores the result in 'result'
  */
 template <typename T>
-void sparse_mdotv ( T *data, int *row_ptr, int *col_idx, int N, T *vec, int vec_size,
-                    T *result )
+void sparse_csr_mdotv ( T *data, int *row_ptr, int *col_idx, int N, T *vec,
+                        int vec_size, T *result )
 {
   for ( int i = 0; i < N; i++ )
   {
@@ -79,6 +80,55 @@ void daxpy ( T *result, T a, T *x, T *y, int vec_size )
     result[i] = a * x[i] + y[i];
 }
 
+/**
+ * Convert a given edgelist into CSC format.
+ * vis = source vertices, vjs = destination vertices
+ * col_count = total number of cols for the given edgelist
+ * col_base = index of starting column
+ * Outputs stored in A, col_ptr and row_idx.
+ */
+template <typename T>
+void convert_edgelist_to_csc ( vector<T> &data, vector<int> &vis, vector<int> &vjs,
+                               int col_count, int col_base, T** A, int **col_ptr,
+                               int **row_idx )
+{
+  int nnz = data.size();
+  *A = new T[nnz];
+  *row_idx = new int[nnz];
+  *col_ptr = new int[col_count+1];
+
+  int cur_col_idx = 0;
+  (*col_ptr)[0] = 0;
+
+  for ( int data_idx = 0; data_idx < data.size(); data_idx++ )
+  {
+    while ( vjs[data_idx] > cur_col_idx + col_base )
+    {
+      cur_col_idx++;
+      (*col_ptr)[cur_col_idx] = data_idx;
+    }
+    (*row_idx)[data_idx] = vis[data_idx];
+    (*A)[data_idx] = data[data_idx];
+  }
+
+  cur_col_idx++;
+  while (cur_col_idx < col_count + 1) (*col_ptr)[cur_col_idx++] = data.size();
+}
+
+/**
+ * Multiplies a matrix stored in CSC format, with 'N' columns and 'M' rows,
+ * with a dense vector of size vec_size, and stores the result in 'result'
+ */
+template <typename T>
+void sparse_csc_mdotv ( T *data, int *col_ptr, int *row_idx, int N, int M,
+                        T *vec, int vec_size, T *result )
+{
+  memset(result, 0, M * sizeof(T));
+  for ( int i = 0; i < N; i++ )
+    for ( int j = col_ptr[i]; j < col_ptr[i+1]; j++ )
+      result[row_idx[j]] += data[j] * vec[i];
+}
+
 template void convert_edgelist_to_csr (
     vector<float> &data, vector<int> &vis, vector<int> &vjs,
     int row_count, int row_base, float** A, int **row_ptr,
@@ -89,12 +139,30 @@ template void convert_edgelist_to_csr (
     int row_count, int row_base, double** A, int **row_ptr,
     int **col_idx );
 
-template void sparse_mdotv (
+template void sparse_csr_mdotv (
     float *data, int *row_ptr, int *col_idx, int N, float *vec, int vec_size,
     float *result );
 
-template void sparse_mdotv (
+template void sparse_csr_mdotv (
     double *data, int *row_ptr, int *col_idx, int N, double *vec, int vec_size,
+    double *result );
+
+template void convert_edgelist_to_csc (
+    vector<float> &data, vector<int> &vis, vector<int> &vjs,
+    int col_count, int col_base, float** A, int **col_ptr,
+    int **row_idx );
+
+template void convert_edgelist_to_csc (
+    vector<double> &data, vector<int> &vis, vector<int> &vjs,
+    int col_count, int col_base, double** A, int **col_ptr,
+    int **row_idx );
+
+template void sparse_csc_mdotv (
+    float *data, int *col_ptr, int *row_idx, int N, int M, float *vec, int vec_size,
+    float *result );
+
+template void sparse_csc_mdotv (
+    double *data, int *col_ptr, int *row_idx, int N, int M, double *vec, int vec_size,
     double *result );
 
 template float dense_vdotv ( float *vec1, int vec_size, float *vec2 );

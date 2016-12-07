@@ -46,8 +46,9 @@ int main ( int argc, char* argv[] )
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &num_tasks);
 
-  ifstream fin("../data/as20000102.txt");
-  distributed_graph<DATATYPE> *inputGraph = create_from_edgelist_file<DATATYPE>(fin);
+  ifstream fin("../data/as20000102_row.txt");
+  distributed_graph_csr<DATATYPE> *inputGraph =
+    create_csr_from_edgelist_file<DATATYPE>(fin);
   inputGraph -> construct_unnormalized_laplacian();
   inputGraph -> free_adjacency_matrix();
 
@@ -125,7 +126,7 @@ int main ( int argc, char* argv[] )
   for ( int j = 1; j < N; j++ )
   {
     // Compute local alpha of the current iteration
-    sparse_mdotv<DATATYPE>(data, row_ptr, col_idx, rows_in_node, v[j], N, scratch);
+    sparse_csr_mdotv<DATATYPE>(data, row_ptr, col_idx, rows_in_node, v[j], N, scratch);
     alpha[j] = dense_vdotv<DATATYPE>(scratch, rows_in_node, v[j]);
     
     // Reduce sum alphas of different nodes to obtain alpha, then broadcast it back
@@ -226,10 +227,12 @@ int main ( int argc, char* argv[] )
       beta[j+1] = sqrt(res);
 
       // Normalize the vector
-      for ( int k = 0; k < N; k++ )
-        v[j+1][k] /= beta[j+1];
+      for ( int k = local_start_index; k < local_start_index + rows_in_node; k++ )
+        scratch[k-local_start_index] = v[j+1][k]/beta[j+1];
 
-      // TODO: Need to Allgather again
+      // Gather and form the new array v[j+1] on each node
+      MPI_Allgather(scratch, rows_per_node, MPIDATATYPE, v[j+1], rows_per_node,
+                    MPIDATATYPE, MPI_COMM_WORLD);
     }
 
     if ( !prev_reorthogonalized )
@@ -238,7 +241,7 @@ int main ( int argc, char* argv[] )
   }
 
   // Compute the last remaining alpha[N]
-  sparse_mdotv<DATATYPE>(data, row_ptr, col_idx, rows_in_node, v[N], N, v[N+1]);
+  sparse_csr_mdotv<DATATYPE>(data, row_ptr, col_idx, rows_in_node, v[N], N, v[N+1]);
   alpha[N] = dense_vdotv<DATATYPE>(v[N+1], rows_in_node, v[N]);
 
   // Reduce sum alphas of different nodes to obtain alpha, then broadcast it back
