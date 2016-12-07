@@ -1,3 +1,9 @@
+default:
+	mpic++ -c test_construction.cpp -o test_construction.o
+	mpic++ -c graph.cpp -o graph.o
+	mpic++ -c utils.cpp -o utils.o 
+	nvcc -arch=sm_20 -c multiply.cu -o multiply.o
+	mpic++ test_construction.o graph.o utils.o multiply.o -lcudart -L/usr/local/cuda/lib64/ -o test_construction -lcublas
 
 all: run_test_construction run_lanczos_mpi_only_csc run_lanczos_mpi_only_csr
 
@@ -33,3 +39,5 @@ clean:
 	rm lanczos_mpi_only_csr lanczos_mpi_only_csc test_construction lanczos_output_csr_1 \
 		lanczos_output_csr_8 lanczos_output_csc_1 lanczos_output_csc_8 2>/dev/null >/dev/null
 
+clear:
+	rm latedays.qsub.*
