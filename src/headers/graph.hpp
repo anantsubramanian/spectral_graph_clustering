@@ -17,7 +17,8 @@ class distributed_graph
     int N; // Number of nodes
     int M; // Number of edges (synonymous to NNZ for the whole matrix)
 
-    int rows_per_node;
+    int rows_per_node; // Ideal number of rows in each node (when exactly divisible)
+    int rows_in_node;  // Actual number of rows in this node
     int task_id;
 
     // The start index offset for this node in the matrix
@@ -38,11 +39,12 @@ class distributed_graph
 
   public:
 
-    distributed_graph(int N, int M, int rows_per_node, int task_id)
+    distributed_graph(int N, int M, int rows_per_node, int rows_in_node, int task_id)
     {
       this -> N = N;
       this -> M = M;
       this -> rows_per_node = rows_per_node;
+      this -> rows_in_node = rows_in_node;
       this -> task_id = task_id;
 
       this -> row_start_idx = rows_per_node * task_id;
@@ -65,6 +67,12 @@ class distributed_graph
       if (lap_row_ptr) delete lap_row_ptr;
       if (lap_col_idx) delete lap_col_idx;
     }
+
+    int get_N() { return N; }
+    int get_M() { return M; }
+    int get_rows_per_node() { return rows_per_node; }
+    int get_rows_in_node() { return rows_in_node; }
+    int get_row_start_index() { return row_start_idx; }
 
     void construct_unnormalized_laplacian();
     void free_adjacency_matrix();

@@ -24,6 +24,7 @@ distributed_graph<T>* create_from_edgelist_file(std::ifstream &fin)
   int N, M;
   int num_nodes;
   int rows_per_node, task_id;
+  int rows_in_node;
   MPI_Comm_rank(MPI_COMM_WORLD, &task_id);
   MPI_Comm_size(MPI_COMM_WORLD, &num_nodes);
 
@@ -31,8 +32,18 @@ distributed_graph<T>* create_from_edgelist_file(std::ifstream &fin)
 
   rows_per_node = (N + num_nodes - 1) / num_nodes;
 
+  if ( N % num_nodes != 0 )
+  {
+    if ( task_id != num_nodes - 1 )
+      rows_in_node = rows_per_node;
+    else
+      rows_in_node = N % rows_per_node;
+  }
+  else
+    rows_in_node = rows_per_node;
+
   distributed_graph<T> *new_graph =
-    new distributed_graph<T>(N, M, rows_per_node, task_id);
+    new distributed_graph<T>(N, M, rows_per_node, rows_in_node, task_id);
 
   int this_start_index = rows_per_node * task_id;
 
@@ -120,19 +131,9 @@ void distributed_graph<T>::construct_unnormalized_laplacian()
   int num_tasks;
   MPI_Comm_size(MPI_COMM_WORLD, &num_tasks);
 
-  // Self loop count in the Laplacian should be of size rows_per_node
-  // (except for the last node, if N % num_tasks != 0)
+  // Self loop count in the Laplacian should be of size rows_in_node
   // So we can estimate the size of nnz and use this to verify correctness.
-  int lap_nnz = nnz_local;
-  if ( N % rows_per_node != 0 )
-  {
-    if ( task_id == num_tasks - 1 )
-      lap_nnz += (N%rows_per_node) - selfloop_count;
-    else
-      lap_nnz += rows_per_node - selfloop_count;
-  }
-  else
-    lap_nnz += rows_per_node - selfloop_count;
+  int lap_nnz = nnz_local + rows_in_node - selfloop_count;
 
   // The number of elements added should match up with our estimate of nnz
   assert(data.size() == lap_nnz);
