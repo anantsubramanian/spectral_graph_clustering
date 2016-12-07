@@ -46,30 +46,30 @@ int main ( int argc, char* argv[] )
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &num_tasks);
 
-  ifstream fin("../data/as20000102_row.txt");
-  distributed_graph_csr<DATATYPE> *inputGraph =
-    create_csr_from_edgelist_file<DATATYPE>(fin);
+  ifstream fin("../data/as20000102_col.txt");
+  distributed_graph_csc<DATATYPE> *inputGraph =
+    create_csc_from_edgelist_file<DATATYPE>(fin);
   inputGraph -> construct_unnormalized_laplacian();
   inputGraph -> free_adjacency_matrix();
 
   double data_load_time = MPI_Wtime();
 
-  // Get distributed Laplacian CSR submatrices
+  // Get distributed Laplacian CSC submatrices
   DATATYPE *data = inputGraph -> get_lap_A();
-  int *row_ptr = inputGraph -> get_lap_row_ptr();
-  int *col_idx = inputGraph -> get_lap_col_idx();
+  int *col_ptr = inputGraph -> get_lap_col_ptr();
+  int *row_idx = inputGraph -> get_lap_row_idx();
   int N = inputGraph -> get_N();
-  int rows_in_node = inputGraph -> get_rows_in_node();
-  int rows_per_node = inputGraph -> get_rows_per_node();
-  int local_start_index = inputGraph -> get_row_start_index();
+  int cols_in_node = inputGraph -> get_cols_in_node();
+  int cols_per_node = inputGraph -> get_cols_per_node();
+  int local_start_index = inputGraph -> get_col_start_index();
 
   // Determine the square root of the machine precision for re-orthogonalization
   DATATYPE epsilon = numeric_limits<DATATYPE>::epsilon();
   DATATYPE sqrteps = sqrt(epsilon);
   DATATYPE eta = pow(epsilon, 0.75);
 
-  // The intermediate vectors v
-  int vsize = rows_per_node * num_tasks;
+  // The distributed intermediate vectors v
+  int vsize = cols_per_node;
   DATATYPE *v_data = new DATATYPE[(N+2) * vsize];
   DATATYPE **v = new DATATYPE*[N+2];
   for ( int i = 0; i < N+2; i++ )
@@ -87,28 +87,25 @@ int main ( int argc, char* argv[] )
   srand(seedval);
 
   // Generate the initial normalized vectors v1, and the 0 vector v0
-  // TODO: Check which is faster, generate locally on each machine, or generate in
-  // parallel and perform AllGather?
-  // Generating locally for now. All of them are using the same seed to the
-  // pseudo-random number generator. WILL ONLY WORK if all machines are using the
-  // same library version.
-  DATATYPE sum = 0;
-  for ( int i = 0; i < N; i++ )
+  DATATYPE sum = 0.;
+  DATATYPE sum_local = 0.;
+  for ( int i = 0; i < cols_in_node; i++ )
   {
-    v[0][i] = 0;
+    v[0][i] = 0.;
     DATATYPE temp = rand() / (DATATYPE) RAND_MAX;
     v[1][i] = temp;
-    sum += temp*temp;
+    sum_local += temp*temp;
   }
+  MPI_Allreduce(&sum_local, &sum, 1, MPIDATATYPE, MPI_SUM, MPI_COMM_WORLD);
   sum = sqrt(sum);
 
-  for ( int i = 0; i < N; i++ )
+  for ( int i = 0; i < cols_in_node; i++ )
     v[1][i] /= sum;
 
   beta[1] = 0;
   
   // Scratch array for partial results
-  DATATYPE *scratch = new DATATYPE[rows_per_node];
+  DATATYPE *scratch = new DATATYPE[N];
   DATATYPE *omega_data = new DATATYPE[(N+1) * (N+1)];
   DATATYPE **omega = new DATATYPE*[N+1];
   for ( int i = 0; i < N+1; i++ )
@@ -122,37 +119,43 @@ int main ( int argc, char* argv[] )
 
   double initialization_time = MPI_Wtime();
 
+  // Re-seed pseudo random number generator, as the calls to random would have been
+  // different for the last node if N % cols_per_node != 0
+  if ( rank == MASTER )
+    seedval = time(NULL);
+  MPI_Bcast(&seedval, 1, MPI_UNSIGNED, MASTER, MPI_COMM_WORLD);
+  srand(seedval);
+
   // Start main Lanczos loop to compute the tri-diagonal elements, alpha[i] and beta[i]
   for ( int j = 1; j < N; j++ )
   {
-    // Compute local alpha of the current iteration
-    sparse_csr_mdotv<DATATYPE>(data, row_ptr, col_idx, rows_in_node, v[j], N, scratch);
-    alpha[j] = dense_vdotv<DATATYPE>(scratch, rows_in_node, v[j]);
+    // Compute the distributed vector v[j+1]
+    sparse_csc_mdotv<DATATYPE>(data, col_ptr, row_idx, cols_in_node, N, v[j], N, scratch);
     
-    // Reduce sum alphas of different nodes to obtain alpha, then broadcast it back
-    DATATYPE res;
-    MPI_Allreduce(&alpha[j], &res, 1, MPIDATATYPE, MPI_SUM, MPI_COMM_WORLD);
-    alpha[j] = res;
+    // Reduce sum the corresponding parts of v[j+1] to each node
+    for ( int k = 0; k < num_tasks; k++ )
+      MPI_Reduce(scratch + k * cols_per_node, v[j+1], cols_per_node,
+          MPIDATATYPE, MPI_SUM, k, MPI_COMM_WORLD);
+
+    // Compute the alpha for this iteration
+    // Reduce sum alphas of different nodes to obtain alpha
+    DATATYPE alpha_local = dense_vdotv<DATATYPE>(v[j+1], cols_in_node, v[j]);
+    MPI_Allreduce(&alpha_local, &alpha[j], 1, MPIDATATYPE, MPI_SUM, MPI_COMM_WORLD);
 
     // Orthogonalize against past 2 vectors v[j], v[j-1]
-    // Need to take care to subtract the right subpart of the arrays for each node
-    daxpy<DATATYPE>(scratch, -alpha[j], v[j] + local_start_index, scratch, rows_in_node);
-    daxpy<DATATYPE>(scratch, -beta[j], v[j-1] + local_start_index, scratch, rows_in_node);
+    daxpy<DATATYPE>(v[j+1], -alpha[j], v[j], v[j+1], cols_in_node);
+    daxpy<DATATYPE>(v[j+1], -beta[j], v[j-1], v[j+1], cols_in_node);
 
     // Normalize v[j+1] and store normalization constant as beta[j+1]
-    beta[j+1] = 0;
-    for ( int k = 0; k < rows_in_node; k++ )
-      beta[j+1] += scratch[k]*scratch[k];
-    MPI_Allreduce(&beta[j+1], &res, 1, MPIDATATYPE, MPI_SUM, MPI_COMM_WORLD);
-    beta[j+1] = sqrt(res);
+    DATATYPE beta_local = 0.;
+    for ( int k = 0; k < cols_in_node; k++ )
+      beta_local += v[j+1][k]*v[j+1][k];
+    MPI_Allreduce(&beta_local, &beta[j+1], 1, MPIDATATYPE, MPI_SUM, MPI_COMM_WORLD);
+    beta[j+1] = sqrt(beta[j+1]);
 
     // Normalize local portion of the vector
-    for ( int k = 0; k < rows_in_node; k++ )
-      scratch[k] /= beta[j+1];
-
-    // Gather and form the new array v[j+1] on each node
-    MPI_Allgather(scratch, rows_per_node, MPIDATATYPE, v[j+1], rows_per_node,
-                  MPIDATATYPE, MPI_COMM_WORLD);
+    for ( int k = 0; k < cols_in_node; k++ )
+      v[j+1][k] /= beta[j+1];
 
     // Check and perform necessary re-orthogonalization
     // psi is same for all k
@@ -205,14 +208,9 @@ int main ( int argc, char* argv[] )
     {
       int index = to_reorthogonalize[k];
       DATATYPE temp;
-      DATATYPE temp_local =
-        dense_vdotv<DATATYPE>(
-            v[j+1]+local_start_index, rows_in_node, v[index]+local_start_index
-        );
+      DATATYPE temp_local = dense_vdotv<DATATYPE>(v[j+1], cols_in_node, v[index]);
       MPI_Allreduce(&temp_local, &temp, 1, MPIDATATYPE, MPI_SUM, MPI_COMM_WORLD);
-      daxpy<DATATYPE>(
-          v[j+1]+local_start_index, -temp, v[index]+local_start_index,
-          v[j+1]+local_start_index, rows_in_node);
+      daxpy<DATATYPE>(v[j+1], -temp, v[index], v[j+1], cols_in_node);
       // Update estimate after this vector has been re-normalized
       omega[j+1][index] = epsilon * random_normal(0, 1.5);
     }
@@ -220,19 +218,15 @@ int main ( int argc, char* argv[] )
     if ( to_reorthogonalize.size() > 0 )
     {
       // Need to re-normalize v[j+1] and store normalization constant as beta[j+1]
-      beta[j+1] = 0;
-      for ( int k = local_start_index; k < local_start_index + rows_in_node; k++ )
-        beta[j+1] += v[j+1][k]*v[j+1][k];
-      MPI_Allreduce(&beta[j+1], &res, 1, MPIDATATYPE, MPI_SUM, MPI_COMM_WORLD);
-      beta[j+1] = sqrt(res);
+      beta_local = 0.;
+      for ( int k = 0; k < cols_in_node; k++ )
+        beta_local += v[j+1][k]*v[j+1][k];
+      MPI_Allreduce(&beta_local, &beta[j+1], 1, MPIDATATYPE, MPI_SUM, MPI_COMM_WORLD);
+      beta[j+1] = sqrt(beta[j+1]);
 
-      // Normalize the vector
-      for ( int k = local_start_index; k < local_start_index + rows_in_node; k++ )
-        scratch[k-local_start_index] = v[j+1][k]/beta[j+1];
-
-      // Gather and form the new array v[j+1] on each node
-      MPI_Allgather(scratch, rows_per_node, MPIDATATYPE, v[j+1], rows_per_node,
-                    MPIDATATYPE, MPI_COMM_WORLD);
+      // Normalize the local portion of the vector
+      for ( int k = 0; k < cols_in_node; k++ )
+        v[j+1][k] /= beta[j+1];
     }
 
     if ( !prev_reorthogonalized )
@@ -241,13 +235,13 @@ int main ( int argc, char* argv[] )
   }
 
   // Compute the last remaining alpha[N]
-  sparse_csr_mdotv<DATATYPE>(data, row_ptr, col_idx, rows_in_node, v[N], N, v[N+1]);
-  alpha[N] = dense_vdotv<DATATYPE>(v[N+1], rows_in_node, v[N]);
+  sparse_csc_mdotv<DATATYPE>(data, col_ptr, row_idx, cols_in_node, N, v[N], N, scratch);
+  for ( int k = 0; k < num_tasks; k++ )
+    MPI_Reduce(scratch + k * cols_per_node, v[N+1], cols_per_node,
+        MPIDATATYPE, MPI_SUM, k, MPI_COMM_WORLD);
 
-  // Reduce sum alphas of different nodes to obtain alpha, then broadcast it back
-  DATATYPE res;
-  MPI_Allreduce(&alpha[N], &res, 1, MPIDATATYPE, MPI_SUM, MPI_COMM_WORLD);
-  alpha[N] = res;
+  DATATYPE alpha_local = dense_vdotv<DATATYPE>(v[N+1], cols_in_node, v[N]);
+  MPI_Allreduce(&alpha_local, &alpha[N], 1, MPIDATATYPE, MPI_SUM, MPI_COMM_WORLD);
 
   double tri_diagonalization_time = MPI_Wtime();
 
