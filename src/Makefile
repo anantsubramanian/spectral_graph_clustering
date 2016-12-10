@@ -39,12 +39,7 @@ lanczos_mpi_cuda_csr_8: lanczos_mpi_cuda_csr
 	mpirun -np 8 lanczos_mpi_cuda_csr > lanczos_output_mpi_cuda_csr_8
 
 lanczos_mpi_cuda_csr: lanczos_mpi_cuda_csr.cpp graph.cpp utils.cpp headers/graph.hpp headers/utils.hpp
-	mpic++ -c lanczos_mpi_cuda_csr.cpp -o lanczos_mpi_cuda_csr.o
-	mpic++ -c graph.cpp -o graph.o
-	mpic++ -c utils.cpp -o utils.o 
-	#nvcc -arch=sm_20 -c multiply.cu -o multiply.o
-	nvcc -arch=sm_20 -c cu_utils.cu -o cu_utils.o
-	mpic++ lanczos_mpi_cuda_csr.o graph.o utils.o cu_utils.o -lcudart -L/usr/local/cuda/lib64/ -lcublas -o lanczos_mpi_cuda_csr 
+	nvcc lanczos_mpi_cuda_csr.cpp graph.cpp utils.cpp -L/opt/openmpi/lib -lmpi_cxx -lmpi -libverbs -ldat -lrt -lnsl -lutil -lm -ldl -lm -lrt -lnsl -lutil -lm -ldl -lcublas -I/opt/openmpi/include -o lanczos_mpi_cuda_csr
 
 
 run_test_construction: test_construction
