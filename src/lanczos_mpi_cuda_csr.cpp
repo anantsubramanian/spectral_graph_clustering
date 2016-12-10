@@ -11,6 +11,9 @@
 #include <cstdlib>
 #include <ctime>
 #include "mpi.h"
+#include "cublas_v2.h"
+#include <cuda_runtime_api.h>
+#include <cuda.h>
 #include "headers/utils.hpp"
 #ifndef __GRAPH
   #include "headers/graph.hpp"
@@ -22,7 +25,7 @@
 
 using namespace std;
 
-void cu_daxpy( float *result, float a, float *x, float *y, int vec_size );
+void cu_daxpy( float *result, float a, float *x, float *y, int rows_in_node );
 
 /**
  * Generate a normal random number using the Box-Muller
@@ -111,7 +114,7 @@ int main ( int argc, char* argv[] )
   
   // Scratch array for partial results
   DATATYPE *scratch = new DATATYPE[rows_per_node];
-  DATATYPE *cu_scratch = new DATATYPE[rows_per_node];
+  DATATYPE *nextBeta= new DATATYPE;
   DATATYPE *omega_data = new DATATYPE[(N+1) * (N+1)];
   DATATYPE **omega = new DATATYPE*[N+1];
   for ( int i = 0; i < N+1; i++ )
@@ -125,10 +128,22 @@ int main ( int argc, char* argv[] )
 
   double initialization_time = MPI_Wtime();
 
+  cublasHandle_t handle;
+  cublasCreate(&handle);
+
+  float *devPtrX , *devPtrScratch, *devPtrNextBeta;
+
+  float a;
+
+  cudaMalloc( (void**) &devPtrX, rows_in_node * sizeof(float));	// vector A
+  cudaMalloc( (void**) &devPtrScratch, rows_in_node * sizeof(float));		// vector scratch
+  cudaMalloc( (void**) &devPtrNextBeta, sizeof(float));
+
   // Start main Lanczos loop to compute the tri-diagonal elements, alpha[i] and beta[i]
   for ( int j = 1; j < N; j++ )
   {
     // Compute local alpha of the current iteration
+    // CUDA
     sparse_csr_mdotv<DATATYPE>(data, row_ptr, col_idx, rows_in_node, v[j], N, scratch);
     alpha[j] = dense_vdotv<DATATYPE>(scratch, rows_in_node, v[j]);
     
@@ -137,18 +152,22 @@ int main ( int argc, char* argv[] )
     MPI_Allreduce(&alpha[j], &res, 1, MPIDATATYPE, MPI_SUM, MPI_COMM_WORLD);
     alpha[j] = res;
 
+    cublasSetVector( rows_in_node, sizeof(float), scratch, 1, devPtrScratch, 1);
+
     // Orthogonalize against past 2 vectors v[j], v[j-1]
     // Need to take care to subtract the right subpart of the arrays for each node
     
-    memcpy(cu_scratch, scratch, rows_in_node * sizeof(float));
+    a = -alpha[j];
+    cublasSetVector( rows_in_node, sizeof(float), v[j] + local_start_index, 1, devPtrX, 1);
+    cublasSaxpy(handle, rows_in_node, &a, devPtrX, 1, devPtrScratch, 1);
 
-    //cout << "rows in node: " << rows_in_node;
-    //daxpy<DATATYPE>(scratch, -alpha[j], v[j] + local_start_index, scratch, rows_in_node);
-    cu_daxpy(cu_scratch, -alpha[j], v[j] + local_start_index, cu_scratch, rows_in_node);
+    a = -beta[j];
+    cublasSetVector( rows_in_node, sizeof(float), v[j-1] + local_start_index, 1, devPtrX, 1);
+    cublasSaxpy(handle, rows_in_node, &a, devPtrX, 1, devPtrScratch, 1);
 
-    //daxpy<DATATYPE>(scratch, -beta[j], v[j-1] + local_start_index, scratch, rows_in_node);
-    cu_daxpy(cu_scratch, -beta[j], v[j-1] + local_start_index, cu_scratch, rows_in_node);
-    scratch = cu_scratch;
+    // copy value of scratch to host 
+    cublasGetVector (rows_in_node, sizeof(float), devPtrScratch, 1, scratch, 1);
+
 
     // Sanity check:
     // There is a very small difference between the computation in gpu and cpu in the order of e-08
@@ -159,15 +178,18 @@ int main ( int argc, char* argv[] )
 
 
     // Normalize v[j+1] and store normalization constant as beta[j+1]
-    beta[j+1] = 0;
-    for ( int k = 0; k < rows_in_node; k++ )
-      beta[j+1] += scratch[k]*scratch[k];
+    cublasSdot(handle, rows_in_node, devPtrScratch, 1, devPtrScratch, 1, nextBeta);
+    beta[j+1] = *nextBeta;
+    
+    cudaThreadSynchronize(); // block until the device has completed
+
     MPI_Allreduce(&beta[j+1], &res, 1, MPIDATATYPE, MPI_SUM, MPI_COMM_WORLD);
     beta[j+1] = sqrt(res);
 
     // Normalize local portion of the vector
-    for ( int k = 0; k < rows_in_node; k++ )
-      scratch[k] /= beta[j+1];
+    a = 1/beta[j+1];
+    cublasSscal(handle, rows_in_node, &a, devPtrScratch, 1);
+    cublasGetVector (rows_in_node, sizeof(float), devPtrScratch, 1, scratch, 1);
 
     // Gather and form the new array v[j+1] on each node
     MPI_Allgather(scratch, rows_per_node, MPIDATATYPE, v[j+1], rows_per_node,
