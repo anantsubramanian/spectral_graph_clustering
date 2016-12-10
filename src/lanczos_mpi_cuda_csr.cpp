@@ -14,6 +14,7 @@
 #include "cublas_v2.h"
 #include <cuda_runtime_api.h>
 #include <cuda.h>
+#include "cusparse.h"
 #include "headers/utils.hpp"
 #ifndef __GRAPH
   #include "headers/graph.hpp"
@@ -63,6 +64,7 @@ int main ( int argc, char* argv[] )
   DATATYPE *data = inputGraph -> get_lap_A();
   int *row_ptr = inputGraph -> get_lap_row_ptr();
   int *col_idx = inputGraph -> get_lap_col_idx();
+  int nnz = inputGraph -> get_lap_nnz_local();
   int N = inputGraph -> get_N();
   int rows_in_node = inputGraph -> get_rows_in_node();
   int rows_per_node = inputGraph -> get_rows_per_node();
@@ -131,20 +133,55 @@ int main ( int argc, char* argv[] )
   cublasHandle_t handle;
   cublasCreate(&handle);
 
+
   float *devPtrX , *devPtrScratch, *devPtrNextBeta;
+  float *devPtrCsrVal;
+  int *devPtrCsrRowPtr, *devPtrCsrColIdx;
 
   float a;
 
   cudaMalloc( (void**) &devPtrX, rows_in_node * sizeof(float));	// vector A
-  cudaMalloc( (void**) &devPtrScratch, rows_in_node * sizeof(float));		// vector scratch
   cudaMalloc( (void**) &devPtrNextBeta, sizeof(float));
+
+  // cusparse init
+  cusparseHandle_t cusparse_handle=0;
+  cusparseMatDescr_t descr=0;
+  cusparseCreate(&cusparse_handle);
+
+  cusparseCreateMatDescr(&descr); 
+  cusparseSetMatType(descr,CUSPARSE_MATRIX_TYPE_GENERAL);
+  cusparseSetMatIndexBase(descr,CUSPARSE_INDEX_BASE_ZERO);
+
+  float one = 1;
+  float zero = 0;
+
+  // for CSR
+  cudaMalloc( (void**) &devPtrCsrVal, nnz * sizeof(float));
+  cudaMalloc( (void**) &devPtrCsrRowPtr, (rows_per_node + 1) * sizeof(int));
+  cudaMalloc( (void**) &devPtrCsrColIdx, nnz * sizeof(int));
+
+  // for scratch vector
+  cudaMalloc( (void**) &devPtrScratch, rows_in_node * sizeof(float));		// vector scratch
+  cudaMemset(devPtrScratch, 0, rows_in_node * sizeof(float));
+
 
   // Start main Lanczos loop to compute the tri-diagonal elements, alpha[i] and beta[i]
   for ( int j = 1; j < N; j++ )
   {
     // Compute local alpha of the current iteration
-    // CUDA
-    sparse_csr_mdotv<DATATYPE>(data, row_ptr, col_idx, rows_in_node, v[j], N, scratch);
+    
+    cudaMemcpy(devPtrCsrVal, data, nnz * sizeof(DATATYPE), cudaMemcpyHostToDevice);
+    cudaMemcpy(devPtrCsrRowPtr, row_ptr, (rows_per_node+1) * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(devPtrCsrColIdx, col_idx, nnz * sizeof(int), cudaMemcpyHostToDevice);
+
+    cudaMemcpy(devPtrScratch, scratch, rows_in_node * sizeof(float), cudaMemcpyHostToDevice);
+
+    cusparseScsrmv(cusparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE, rows_per_node, N, nnz, &one, descr,
+        devPtrCsrVal, devPtrCsrRowPtr, devPtrCsrColIdx, v[j], &zero, devPtrScratch);
+
+    cudaMemcpy(scratch, devPtrScratch, rows_in_node * sizeof(float), cudaMemcpyHostToDevice);
+
+    //sparse_csr_mdotv<DATATYPE>(data, row_ptr, col_idx, rows_in_node, v[j], N, scratch);
     alpha[j] = dense_vdotv<DATATYPE>(scratch, rows_in_node, v[j]);
     
     // Reduce sum alphas of different nodes to obtain alpha, then broadcast it back

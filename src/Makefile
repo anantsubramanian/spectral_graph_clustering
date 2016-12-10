@@ -33,13 +33,13 @@ lanczos_mpi_only_csr: lanczos_mpi_only_csr.cpp graph.cpp utils.cpp headers/graph
 run_lanczos_mpi_cuda_csr: lanczos_mpi_cuda_csr_1 lanczos_mpi_cuda_csr_8
 
 lanczos_mpi_cuda_csr_1: lanczos_mpi_cuda_csr
-	mpirun -np 1 lanczos_mpi_cuda_csr > lanczos_output_mpi_cuda_csr_1
+	mpirun -np 1 lanczos_mpi_cuda_csr
 
 lanczos_mpi_cuda_csr_8: lanczos_mpi_cuda_csr
-	mpirun -np 8 lanczos_mpi_cuda_csr > lanczos_output_mpi_cuda_csr_8
+	mpirun -np 8 lanczos_mpi_cuda_csr
 
 lanczos_mpi_cuda_csr: lanczos_mpi_cuda_csr.cpp graph.cpp utils.cpp headers/graph.hpp headers/utils.hpp
-	nvcc lanczos_mpi_cuda_csr.cpp graph.cpp utils.cpp -L/opt/openmpi/lib -lmpi_cxx -lmpi -libverbs -ldat -lrt -lnsl -lutil -lm -ldl -lm -lrt -lnsl -lutil -lm -ldl -lcublas -I/opt/openmpi/include -o lanczos_mpi_cuda_csr
+	nvcc lanczos_mpi_cuda_csr.cpp graph.cpp utils.cpp -L/opt/openmpi/lib -lmpi_cxx -lmpi -libverbs -ldat -lrt -lnsl -lutil -lm -ldl -lm -lrt -lnsl -lutil -lm -ldl -lcublas -lcusparse -I/opt/openmpi/include -o lanczos_mpi_cuda_csr
 
 
 run_test_construction: test_construction
