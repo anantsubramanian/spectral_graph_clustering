@@ -26,8 +26,6 @@
 
 using namespace std;
 
-void cu_daxpy( float *result, float a, float *x, float *y, int rows_in_node );
-
 /**
  * Generate a normal random number using the Box-Muller
  * transform.
@@ -116,6 +114,7 @@ int main ( int argc, char* argv[] )
   
   // Scratch array for partial results
   DATATYPE *scratch = new DATATYPE[rows_per_node];
+  DATATYPE *test_scratch = new DATATYPE[rows_per_node];
   DATATYPE *nextBeta= new DATATYPE;
   DATATYPE *omega_data = new DATATYPE[(N+1) * (N+1)];
   DATATYPE **omega = new DATATYPE*[N+1];
@@ -135,10 +134,11 @@ int main ( int argc, char* argv[] )
 
 
   float *devPtrX , *devPtrScratch, *devPtrNextBeta;
-  float *devPtrCsrVal;
+  float *devPtrCsrData;
   int *devPtrCsrRowPtr, *devPtrCsrColIdx;
+  float *devPtrVj;
 
-  float a;
+  float devAlpha;
 
   cudaMalloc( (void**) &devPtrX, rows_in_node * sizeof(float));	// vector A
   cudaMalloc( (void**) &devPtrNextBeta, sizeof(float));
@@ -156,13 +156,13 @@ int main ( int argc, char* argv[] )
   float zero = 0;
 
   // for CSR
-  cudaMalloc( (void**) &devPtrCsrVal, nnz * sizeof(float));
+  cudaMalloc( (void**) &devPtrCsrData, nnz * sizeof(float));
   cudaMalloc( (void**) &devPtrCsrRowPtr, (rows_per_node + 1) * sizeof(int));
   cudaMalloc( (void**) &devPtrCsrColIdx, nnz * sizeof(int));
+  cudaMalloc( (void**) &devPtrVj, rows_per_node * sizeof(float));
 
   // for scratch vector
-  cudaMalloc( (void**) &devPtrScratch, rows_in_node * sizeof(float));		// vector scratch
-  cudaMemset(devPtrScratch, 0, rows_in_node * sizeof(float));
+  cudaMalloc( (void**) &devPtrScratch, rows_per_node * sizeof(float));		// vector scratch
 
 
   // Start main Lanczos loop to compute the tri-diagonal elements, alpha[i] and beta[i]
@@ -170,37 +170,54 @@ int main ( int argc, char* argv[] )
   {
     // Compute local alpha of the current iteration
     
-    cudaMemcpy(devPtrCsrVal, data, nnz * sizeof(DATATYPE), cudaMemcpyHostToDevice);
+    cudaMemcpy(devPtrCsrData, data, nnz * sizeof(DATATYPE), cudaMemcpyHostToDevice);
     cudaMemcpy(devPtrCsrRowPtr, row_ptr, (rows_per_node+1) * sizeof(int), cudaMemcpyHostToDevice);
     cudaMemcpy(devPtrCsrColIdx, col_idx, nnz * sizeof(int), cudaMemcpyHostToDevice);
-
-    cudaMemcpy(devPtrScratch, scratch, rows_in_node * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(devPtrVj, v[j], rows_per_node * sizeof(int), cudaMemcpyHostToDevice);
 
     cusparseScsrmv(cusparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE, rows_per_node, N, nnz, &one, descr,
-        devPtrCsrVal, devPtrCsrRowPtr, devPtrCsrColIdx, v[j], &zero, devPtrScratch);
+        devPtrCsrData, devPtrCsrRowPtr, devPtrCsrColIdx, devPtrVj, &zero, devPtrScratch);
 
-    cudaMemcpy(scratch, devPtrScratch, rows_in_node * sizeof(float), cudaMemcpyHostToDevice);
+    //cudaMemcpy(scratch, devPtrScratch, rows_per_node * sizeof(float), cudaMemcpyDeviceToHost);
 
-    //sparse_csr_mdotv<DATATYPE>(data, row_ptr, col_idx, rows_in_node, v[j], N, scratch);
-    alpha[j] = dense_vdotv<DATATYPE>(scratch, rows_in_node, v[j]);
+    //sparse_csr_mdotv<DATATYPE>(data, row_ptr, col_idx, rows_in_node, v[j], N, test_scratch);
+
+
+    // for verification. cpu gpu error within single precision acc
+    //float err_sum = 0;
+    //for (int i = 0; i < rows_per_node; i++) {
+      //if ( i%100 == 0) 
+      //{
+        //float err = scratch[i] - test_scratch[i];
+        //err_sum += err;
+        //if (err!= 0)
+          //cout << "slight error" << err_sum << endl;
+      //}
+
+    //}
+    //cout << "err_sum" << err_sum<< endl;
+
+    float *devAlpha;
+    cublasSdot(handle, rows_in_node, devPtrScratch, 1, devPtrVj, 1, &alpha[j]);
+    //alpha[j] = dense_vdotv<DATATYPE>(scratch, rows_in_node, v[j]);
     
     // Reduce sum alphas of different nodes to obtain alpha, then broadcast it back
     DATATYPE res;
     MPI_Allreduce(&alpha[j], &res, 1, MPIDATATYPE, MPI_SUM, MPI_COMM_WORLD);
     alpha[j] = res;
 
-    cublasSetVector( rows_in_node, sizeof(float), scratch, 1, devPtrScratch, 1);
+    //cublasSetVector( rows_in_node, sizeof(float), scratch, 1, devPtrScratch, 1);
 
     // Orthogonalize against past 2 vectors v[j], v[j-1]
     // Need to take care to subtract the right subpart of the arrays for each node
     
-    a = -alpha[j];
+    devAlpha = -alpha[j];
     cublasSetVector( rows_in_node, sizeof(float), v[j] + local_start_index, 1, devPtrX, 1);
-    cublasSaxpy(handle, rows_in_node, &a, devPtrX, 1, devPtrScratch, 1);
+    cublasSaxpy(handle, rows_in_node, &devAlpha, devPtrX, 1, devPtrScratch, 1);
 
-    a = -beta[j];
+    devAlpha = -beta[j];
     cublasSetVector( rows_in_node, sizeof(float), v[j-1] + local_start_index, 1, devPtrX, 1);
-    cublasSaxpy(handle, rows_in_node, &a, devPtrX, 1, devPtrScratch, 1);
+    cublasSaxpy(handle, rows_in_node, &devAlpha, devPtrX, 1, devPtrScratch, 1);
 
     // copy value of scratch to host 
     cublasGetVector (rows_in_node, sizeof(float), devPtrScratch, 1, scratch, 1);
