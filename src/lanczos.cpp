@@ -1,0 +1,385 @@
+// Implementation of the Lanczos algorithm with partial re-orthogonalization
+// using the method described in H. D. Simon, The lanczos algorithm with
+// partial reorthogonalization, Mathematics of Computation, 42(165):pp,
+// 115-142, 1984.
+
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <limits>
+#include <cmath>
+#include <cstdlib>
+#include <ctime>
+#include <algorithm>
+#include "mpi.h"
+#include "headers/utils.hpp"
+#ifndef __GRAPH
+  #include "headers/graph.hpp"
+#endif
+
+// Working with single precision arithmetic can be risky.
+#define MASTER 0
+#define EPS 1e-9
+
+// Uncomment to print debug statements, true orthogonality of intermediate vectors
+// and estimates through the recurrence relation.
+//#define DEBUG
+
+using namespace std;
+
+/**
+ * Generate a normal random number using the Box-Muller
+ * transform.
+ */
+template <typename T>
+T random_normal ( T mu, T sigma )
+{
+  T U = rand() / (T) RAND_MAX;
+  T V = rand() / (T) RAND_MAX;
+
+  T X = (T) (sqrt(-2.0 * log(U)) * cos(2 * M_PI * V));
+  return mu + X * sigma;
+}
+
+/**
+ * Update orthogonality estimate recurrence.
+ */
+template <typename T>
+void update_estimate_recurrence ( T *beta, T *alpha, T **omega, int j, T *scratch,
+                                  T epsilon, T sqrteps, T **v, int rows_in_node,
+                                  int local_start_index, int N )
+{
+  int jplus1 = (j+1)%3;
+  int jminus1 = (j-1)%3;
+  int jmod3 = j%3;
+  // psi is same for all k
+  T psi = epsilon * N * (beta[2] / beta[j+1]) * random_normal(0.0, 0.6);
+  omega[jplus1][j+1] = 1.0;
+  omega[jplus1][j] = psi;
+  omega[jplus1][0] = 0.;
+
+#ifdef DEBUG
+  cerr << "beta[" << j+1 << "] = " << beta[j+1] << "\n";
+#endif
+
+  for ( int k = 1; k < j; k++ )
+  {
+    T theta = epsilon * (beta[k+1] + beta[j+1]) * random_normal(0.0, 0.3);
+    omega[jplus1][k] =
+      theta + (beta[k+1]*omega[jmod3][k+1] + (alpha[k]-alpha[j])*omega[jmod3][k]
+      + beta[k]*omega[jmod3][k-1] - beta[j]*omega[jminus1][k]) / beta[j+1];
+  }
+
+#ifdef DEBUG
+  for ( int k = 1; k < j; k++ )
+  {
+    cerr << "omega[" << j+1 <<"][" << k <<"] = " << omega[jplus1][k] << " ";
+    cerr << dense_vdotv<T>(scratch, rows_in_node, v[k]+local_start_index) << " ";
+    cerr << (fabs(omega[jplus1][k]) > sqrteps ? "True" : "False") << "\n";
+  }
+  cerr << "omega[" << j+1 <<"][" << j <<"] = " << omega[jplus1][j] << " ";
+  cerr << dense_vdotv<T>(scratch, rows_in_node, v[j]+local_start_index) << " ";
+  cerr << (fabs(omega[jplus1][j]) > sqrteps ? "True" : "False") << "\n";
+#endif
+}
+
+/**
+ * Find offending indices to re-orthogonalize against. Returns true if any offending
+ * indices were found.
+ */
+template <typename T>
+bool find_offending_indices ( int j, T **omega, T sqrteps, T eta,
+                              vector<int> &to_reorthogonalize )
+{
+  int jplus1 = (j+1)%3;
+  bool offending_present = false;
+  int k = 1;
+  int low = 1, high = 1;
+  while ( k <= j )
+  {
+    // Find an estimated omega[j+1][k] that exceeds threshold
+    if ( fabs(omega[jplus1][k]) >= sqrteps )
+    {
+      to_reorthogonalize.push_back(k);
+      low = k-1;
+      // Search the eta neighbourhood of this omega
+      while ( low >= high && fabs(omega[jplus1][low]) >= eta )
+      {
+        to_reorthogonalize.push_back(low);
+        low--;
+      }
+      high = k+1;
+      while ( high <= j && fabs(omega[jplus1][high]) >= eta )
+      {
+        to_reorthogonalize.push_back(high);
+        high++;
+      }
+      k = high;
+      offending_present = true;
+    }
+    k++;
+  }
+
+#ifdef DEBUG
+    cerr << "Re-orthogonalizing against: " << to_reorthogonalize.size() << "\n";
+#endif
+
+  return offending_present;
+}
+
+/**
+ * Re-orthogonalize against provided vectors using Gram Schmidt orthogonalization.
+ */
+template <typename T>
+void re_orthogonalize ( T **v, vector<int> &to_reorthogonalize, int local_start_index,
+                        int rows_in_node, T **omega, T *scratch, T epsilon, T sqrteps,
+                        int j, MPI_Datatype mpi_datatype, T *beta, int N )
+{
+  // Re-orthogonalize against these range of vectors, performing updates on
+  // local parts only. Will synchronize at the end.
+  for ( int k = local_start_index; k < local_start_index + rows_in_node; k++ )
+     v[j+1][k] = scratch[k-local_start_index];
+
+  for ( int k = 0; k < to_reorthogonalize.size(); k++ )
+  {
+    int index = to_reorthogonalize[k];
+    T temp;
+    T temp_local = dense_vdotv<T>(scratch, rows_in_node, v[index]+local_start_index);
+    MPI_Allreduce(&temp_local, &temp, 1, mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
+    daxpy<T>(
+        v[j+1]+local_start_index, -temp, v[index]+local_start_index,
+        v[j+1]+local_start_index, rows_in_node);
+    // Update estimate after this vector has been re-normalized
+    omega[(j+1)%3][index] = epsilon * random_normal(0.0, 1.5);
+  }
+
+  if ( to_reorthogonalize.size() > 0 )
+  {
+    // Need to re-normalize v[j+1] and store normalization constant as beta[j+1]
+    beta[j+1] = 0;
+    for ( int k = local_start_index; k < local_start_index + rows_in_node; k++ )
+      beta[j+1] += v[j+1][k]*v[j+1][k];
+    T res;
+    MPI_Allreduce(&beta[j+1], &res, 1, mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
+    beta[j+1] = sqrt(res);
+
+#ifdef DEBUG
+    cerr << "beta[" << j+1 << "] is now = " << beta[j+1] << "\n";
+#endif
+  }
+
+#ifdef DEBUG
+  cerr << "After re-orthogonalization:\n";
+  if ( to_reorthogonalize.size() > 0 )
+    for ( int k = 1; k <= j; k++ )
+    {
+      cerr << "omega[" << j+1 <<"][" << k <<"] = " << omega[(j+1)%3][k] << " ";
+      cerr << dense_vdotv<T>(v[j+1], N, v[k]) << " ";
+      cerr << (fabs(omega[(j+1)%3][k]) > sqrteps ? "True" : "False") << "\n";
+    }
+#endif
+}
+
+
+/**
+ * Run the Lanczos algorithm with partial re-orthogonalization on a distributed CSR
+ * matrix.
+ *
+ * Inputs:
+ *   data - Data array of CSR matrix
+ *   row_ptr - Row pointers for CSR matrix
+ *   col_idx - Column indices corresponding to 'data'
+ *   N - Total number of rows in the matrix (global)
+ *   rows_in_node - Number of rows present in the local node
+ *   rows_per_node - Ideal number of rows per node (if it was exactly divisible)
+ *   local_start_index - Row that row 0 of this matrix partition corresponds to
+ *   M - Number of iterations to run the Lanczos algorithm for (size of tri-diagonal
+ *       matrix)
+ *   mpi_datatype - The MPI datatype corresponding to T (eg. MPI_DOUBLE)
+ *   eta - Neighbourhood to re-orthogonalize in (0 to 1, 0 = none, 1 = full reorth.)
+ *         (optional)
+ *
+ * Outputs:
+ *   alpha_out - The diagonal elements of the tri-diagonal matrix
+ *   beta_out - The off-diagonal elements of the tri-diagonal matrix
+ *   v_out - The produced intermediate orthonormal Lanczos vectors (MxN size)
+ */
+template <typename T>
+void lanczos_csr ( T *data, int *row_ptr, int *col_idx, int N, int rows_in_node,
+                   int rows_per_node, int local_start_index, int M,
+                   MPI_Datatype mpi_datatype, T **alpha_out, T **beta_out, 
+                   T ***v_out, T eta )
+{
+  int rank, num_tasks;
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  MPI_Comm_size(MPI_COMM_WORLD, &num_tasks);
+
+  // Determine the square root of the machine precision for re-orthogonalization
+  T epsilon = numeric_limits<T>::epsilon();
+  T sqrteps = sqrt(epsilon);
+  eta = pow(epsilon, eta);
+
+#ifdef DEBUG
+  cerr << "sqrteps = " << sqrteps << "\n";
+  cerr << "eta = " << eta << "\n";
+#endif
+
+  // The intermediate vectors v
+  int vsize = rows_per_node * num_tasks;
+  T *v_data = new T[(M+2) * vsize];
+  T **v = new T*[M+2];
+  for ( int i = 0; i < M+2; ++i )
+    v[i] = v_data + i*vsize;
+  
+  // The values in the tri-diagonal matrix, alphas and betas
+  T *alpha = new T[M+2];
+  T *beta = new T[M+2];
+
+  // Synchronize the seed
+  unsigned int seedval;
+  if ( rank == MASTER )
+    seedval = time(NULL);
+  MPI_Bcast(&seedval, 1, MPI_UNSIGNED, MASTER, MPI_COMM_WORLD);
+
+  srand(seedval);
+
+  // Generate the initial normalized vectors v1, and the 0 vector v0
+  // TODO: Check which is faster, generate locally on each machine, or generate in
+  // parallel and perform AllGather?
+  // Generating locally for now. All of them are using the same seed to the
+  // pseudo-random number generator. WILL ONLY WORK if all machines are using the
+  // same library version.
+  T sum = 0;
+  for ( int i = 0; i < N; ++i )
+  {
+    v[0][i] = 0;
+    T temp = -0.5 + (rand() / (T) RAND_MAX);
+    v[1][i] = temp;
+    sum += temp*temp;
+  }
+  sum = sqrt(sum);
+
+  for ( int i = 0; i < N; ++i )
+    v[1][i] /= sum;
+
+  beta[1] = sum;
+  
+  // Scratch array for partial results
+  T *scratch = new T[rows_per_node];
+  T *omega_data = new T[(M+1) * 3];
+  T **omega = new T*[3];
+  omega[0] = omega_data;
+  omega[1] = omega_data + (M+1);
+  omega[2] = omega_data + 2*(M+1);
+
+  omega[0][0] = 1.0;
+  omega[1][1] = 1.0;
+  omega[1][0] = 0.0;
+
+  vector<int> to_reorthogonalize;
+  bool prev_reorthogonalized = false;
+
+  // Start main Lanczos loop to compute the tri-diagonal elements, alpha[i] and beta[i]
+  for ( int j = 1; j < M; j++ )
+  {
+    // Compute local alpha of the current iteration
+    sparse_csr_mdotv<T>(data, row_ptr, col_idx, rows_in_node, v[j], N, scratch);
+    alpha[j] = dense_vdotv<T>(scratch, rows_in_node, v[j] + local_start_index);
+    
+    // Reduce sum alphas of different nodes to obtain alpha, then broadcast it back
+    T res;
+    MPI_Allreduce(&alpha[j], &res, 1, mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
+    alpha[j] = res;
+
+    // Orthogonalize against past 2 vectors v[j], v[j-1]
+    // Need to take care to subtract the right subpart of the arrays for each node
+    daxpy<T>(scratch, -alpha[j], v[j]+local_start_index, scratch, rows_in_node);
+    daxpy<T>(scratch, -beta[j], v[j-1]+local_start_index, scratch, rows_in_node);
+
+    // Store normalization constant as beta[j+1]
+    beta[j+1] = 0;
+    for ( int k = 0; k < rows_in_node; k++ )
+      beta[j+1] += scratch[k]*scratch[k];
+    MPI_Allreduce(&beta[j+1], &res, 1, mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
+    beta[j+1] = sqrt(res);
+
+    if ( fabs(beta[j+1] - 0) < EPS )
+    {
+      M = j+1;
+      cerr << "Found an invariant subspace at " << j << "\n";
+    }
+
+    // Perform necessary re-orthogonalization
+    update_estimate_recurrence<T> ( beta, alpha, omega, j, scratch, epsilon, sqrteps, v,
+                                    rows_in_node, local_start_index, N );
+
+    if ( !prev_reorthogonalized )
+      prev_reorthogonalized = 
+        find_offending_indices<T> ( j, omega, sqrteps, eta, to_reorthogonalize );
+    else
+      prev_reorthogonalized = false;
+
+    re_orthogonalize<T> ( v, to_reorthogonalize, local_start_index, rows_in_node,
+                          omega, scratch, epsilon, sqrteps, j, mpi_datatype, beta, N );
+
+    // Normalize the vector
+    for ( int k = local_start_index; k < local_start_index + rows_in_node; k++ )
+      scratch[k-local_start_index] = v[j+1][k]/beta[j+1];
+
+    // Gather and form the new array v[j+1] on each node
+    MPI_Allgather ( scratch, rows_per_node, mpi_datatype, v[j+1], rows_per_node,
+                    mpi_datatype, MPI_COMM_WORLD );
+
+    // Wow! Invariant subspace was found
+    if ( fabs(beta[j+1] - 0) < EPS )
+      break;
+
+    if ( !prev_reorthogonalized )
+      to_reorthogonalize.clear();
+    // End loop for j+1
+  }
+
+  // Compute the last remaining alpha[M]
+  sparse_csr_mdotv<T>(data, row_ptr, col_idx, rows_in_node, v[M], N, v[M+1]);
+  alpha[M] = dense_vdotv<T>(v[M+1], rows_in_node, v[M] + local_start_index);
+
+  // Reduce sum alphas of different nodes to obtain alpha, then broadcast it back
+  T res;
+  MPI_Allreduce(&alpha[M], &res, 1, mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
+  alpha[M] = res;
+
+#ifdef DEBUG
+  for ( int j = 1; j < M; j++ )
+    for ( int k = 1; k <= j; k++ )
+      cerr << "orth(" << j << "," << k <<") = " << dense_vdotv<T>(v[j], N, v[k]) << "\n";
+#endif
+
+  *alpha_out = new T[M+1];
+  *beta_out = new T[M+1];
+
+  // Copy the alpha and beta values out
+  memcpy ( *alpha_out, alpha + 1, M * sizeof(T) );
+  memcpy ( *beta_out, beta + 2, M * sizeof(T) );
+
+  // Copy the pointers to the intermediate vectors
+  for ( int i = 1; i <= M; i++ )
+    (*v_out)[i-1] = v[i];
+
+  delete v;
+  delete alpha;
+  delete beta;
+  delete scratch;
+  delete omega_data;
+  delete omega;
+}
+
+template void lanczos_csr (
+    float *data, int *row_ptr, int *col_idx, int N, int rows_in_node,
+    int rows_per_node, int local_start_index, int M, MPI_Datatype mpi_datatype,
+    float **alpha_out, float **beta_out, float ***v_out, float eta );
+
+template void lanczos_csr (
+    double *data, int *row_ptr, int *col_idx, int N, int rows_in_node,
+    int rows_per_node, int local_start_index, int M, MPI_Datatype mpi_datatype,
+    double **alpha_out, double **beta_out, double ***v_out, double eta );
+

@@ -26,6 +26,9 @@ T dense_vdotv ( T *vec1, int vec_sizes, T *vec2 );
 template <typename T>
 void daxpy ( T *result, T a, T *x, T *y, int vec_sizes );
 
+template <typename T>
+void qr_eigen ( T *alpha, T *beta, int N, const T epsilon = 1e-8 );
+
 extern void convert_edgelist_to_csr (
     vector<float> &data, vector<int> &vis, vector<int> &vjs,
     int row_count, int row_base, float** A, int **row_ptr,
@@ -69,4 +72,8 @@ extern double dense_vdotv ( double *vec1, int vec_sizes, double *vec2 );
 extern void daxpy ( float *result, float a, float *x, float *y, int vec_sizes );
 
 extern void daxpy ( double *result, double a, double *x, double *y, int vec_sizes );
+
+extern void qr_eigen ( float *alpha, float *beta, int N, const float epsilon );
+
+extern void qr_eigen ( double *alpha, double *beta, int N, const double epsilon );
 

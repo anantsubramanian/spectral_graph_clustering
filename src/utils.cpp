@@ -1,6 +1,9 @@
 #include "headers/utils.hpp"
 #include <vector>
 #include <cstring>
+#include <algorithm>
+#include <iostream>
+#include <cmath>
 
 using std::vector;
 
@@ -129,6 +132,57 @@ void sparse_csc_mdotv ( T *data, int *col_ptr, int *row_idx, int N, int M,
       result[row_idx[j]] += data[j] * vec[i];
 }
 
+/**
+ * Computes the QR decomposition for a symmetric tri-diagonal matrix.
+ * Implementation adapted from:
+ * https://github.com/linhr/15618/blob/master/src/eigen.h
+ *
+ * If that file is not accessible, try here:
+ * http://linhr.me/15618/final/
+ *
+ * Input: The alpha and beta values corresponding to the tri-diagonal
+ * elements. alpha[i] = T[i][i], and beta[i] = T[i][i-1] = T[i-1][i]
+ *
+ * Output: alpha[i] replaced with eigen value i
+ */
+template <typename T>
+void qr_eigen ( T *alpha, T *beta, int N, const T epsilon )
+{
+  for ( int i = 0; i < N-1; ++i )
+    beta[i] *= beta[i];
+
+  beta[N-1] = 0;
+  bool converged = false;
+
+  while (!converged)
+  {
+    T diff(0.);
+    T u(0.);
+    T ss2(0.), s2(0.);
+    for ( int i = 0; i < N; ++i )
+    {
+      T gamma = alpha[i] - u;
+      T p2 = T(std::abs(1 - s2)) < epsilon ?
+        (1 - ss2) * beta[i-1] :
+        gamma * gamma / (1 - s2);
+      if ( i > 0 )
+        beta[i-1] = s2 * (p2 + beta[i]);
+      ss2 = s2;
+      s2 = beta[i] / (p2 + beta[i]);
+      if ( i < N-1 )
+        u = s2 * (gamma + alpha[i+1]);
+      else
+        u = s2 * gamma;
+      T old = alpha[i];
+      alpha[i] = gamma + u;
+      diff = std::max(diff, T(std::abs(old - alpha[i])));
+    }
+
+    if ( diff < epsilon )
+      converged = true;
+  }
+}
+
 template void convert_edgelist_to_csr (
     vector<float> &data, vector<int> &vis, vector<int> &vjs,
     int row_count, int row_base, float** A, int **row_ptr,
@@ -172,4 +226,8 @@ template double dense_vdotv ( double *vec1, int vec_size, double *vec2 );
 template void daxpy ( float *result, float a, float *x, float *y, int vec_size );
 
 template void daxpy ( double *result, double a, double *x, double *y, int vec_size );
+
+template void qr_eigen ( float *alpha, float *beta, int N, const float epsilon );
+
+template void qr_eigen ( double *alpha, double *beta, int N, const double epsilon );
 
