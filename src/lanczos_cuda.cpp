@@ -29,7 +29,10 @@
 // Uncomment to print debug statements, true orthogonality of intermediate vectors
 // and estimates through the recurrence relation.
 //#define DEBUG
-#define CUDA_DEBUG
+//#define CUDA_DEBUG
+
+#define cuda_malloc_wrapper(x) \
+  if ( (x) != cudaSuccess ) { cerr << "Failed: x\n\n"; }
 
 using namespace std;
 
@@ -140,38 +143,36 @@ template <typename T>
 void re_orthogonalize ( T **v, vector<int> &to_reorthogonalize, int local_start_index,
                         int rows_in_node, T **omega, T *scratch, T epsilon, T sqrteps,
                         int j, MPI_Datatype mpi_datatype, T *beta, int N, T *dot_prods,
-                        T *dot_prods_reduced )
+                        T *dot_prods_reduced, cublasHandle_t handle, T *devPtrVj,
+                        T *devPtrScratch )
 {
   // Re-orthogonalize against these range of vectors, performing updates on
   // local parts only. Will synchronize at the end.
-  for ( int k = local_start_index; k < local_start_index + rows_in_node; k++ )
-     v[j+1][k] = scratch[k-local_start_index];
 
   for ( int k = 0; k < to_reorthogonalize.size(); k++ )
   {
     int index = to_reorthogonalize[k];
-    T temp_local = dense_vdotv<T>(scratch, rows_in_node, v[index]+local_start_index);
-    dot_prods[k] = temp_local;
+    cublasTdot(handle, rows_in_node, devPtrScratch, 1,
+        devPtrVj + index*(N) + local_start_index, 1, &dot_prods[k]);
+    dot_prods[k] = -dot_prods[k];
     // Update estimate after this vector has been re-normalized
     omega[(j+1)%3][index] = epsilon * random_normal(0.0, 1.5);
   }
 
   MPI_Allreduce(dot_prods, dot_prods_reduced,
       to_reorthogonalize.size(), mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
+
   for ( int k = 0; k < to_reorthogonalize.size(); k++ )
   {
     int index = to_reorthogonalize[k];
-    daxpy<T>(
-        v[j+1]+local_start_index, -dot_prods_reduced[k], v[index]+local_start_index,
-        v[j+1]+local_start_index, rows_in_node);
+    cublasTaxpy(handle, rows_in_node, &dot_prods[k],
+        devPtrVj + (index)*N + local_start_index, 1, devPtrScratch, 1);
   }
 
   if ( to_reorthogonalize.size() > 0 )
   {
-    // Need to re-normalize v[j+1] and store normalization constant as beta[j+1]
-    beta[j+1] = 0;
-    for ( int k = local_start_index; k < local_start_index + rows_in_node; k++ )
-      beta[j+1] += v[j+1][k]*v[j+1][k];
+    // Update beta[j+1]
+    cublasTdot(handle, rows_in_node, devPtrScratch, 1, devPtrScratch, 1, &beta[j+1]);
     T res;
     MPI_Allreduce(&beta[j+1], &res, 1, mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
     beta[j+1] = sqrt(res);
@@ -302,7 +303,8 @@ void lanczos_csr_cuda (
 #endif
 
   cublasHandle_t handle;
-  cublasCreate(&handle);
+  if ( cublasCreate(&handle) != CUBLAS_STATUS_SUCCESS )
+    cerr << "Failed to create cuBlas handle\n";
 
   T *devPtrX , *devPtrScratch;
   T *devPtrCsrData;
@@ -312,12 +314,13 @@ void lanczos_csr_cuda (
 
   T devAlpha;
 
-  cudaMalloc( (void**) &devPtrX, rows_in_node * sizeof(T));	// vector A
+  cuda_malloc_wrapper(cudaMalloc( (void**) &devPtrX, rows_in_node * sizeof(T)));
 
   // cusparse init
   cusparseHandle_t cusparse_handle = 0;
   cusparseMatDescr_t descr = 0;
-  cusparseCreate(&cusparse_handle);
+  if ( cusparseCreate(&cusparse_handle) != CUSPARSE_STATUS_SUCCESS )
+    cerr << "Failed to create cuSparse handle\n";
 
   cusparseCreateMatDescr(&descr);
   cusparseSetMatType(descr, CUSPARSE_MATRIX_TYPE_GENERAL);
@@ -327,19 +330,22 @@ void lanczos_csr_cuda (
   T zero = 0;
 
   // for CSR
-  cudaMalloc( (void**) &devPtrCsrData, nnz * sizeof(T) );
-  cudaMalloc( (void**) &devPtrCsrRowPtr, (rows_per_node + 1) * sizeof(int) );
-  cudaMalloc( (void**) &devPtrCsrColIdx, nnz * sizeof(int) );
-  cudaMalloc( (void**) &devPtrVj, rows_per_node * sizeof(T) );
+  cuda_malloc_wrapper(cudaMalloc( (void**) &devPtrCsrData, nnz * sizeof(T) ));
+  cuda_malloc_wrapper(cudaMalloc( (void**) &devPtrCsrRowPtr, (rows_in_node + 1) * sizeof(int) ));
+  cuda_malloc_wrapper(cudaMalloc( (void**) &devPtrCsrColIdx, nnz * sizeof(int) ));
+  cuda_malloc_wrapper(cudaMalloc( (void**) &devPtrVj, (M+1) * N * sizeof(T) ));
 
   // for scratch vector
-  cudaMalloc( (void**) &devPtrScratch, rows_per_node * sizeof(T) );
+  cuda_malloc_wrapper(cudaMalloc( (void**) &devPtrScratch, rows_in_node * sizeof(T) ));
 
   // The matrix doesn't change. It only needs to be copied into the memory once before
   // the loop.
   cudaMemcpy(devPtrCsrData, data, nnz * sizeof(T), cudaMemcpyHostToDevice);
-  cudaMemcpy(devPtrCsrRowPtr, row_ptr, (rows_per_node+1) * sizeof(int), cudaMemcpyHostToDevice);
+  cudaMemcpy(devPtrCsrRowPtr, row_ptr, (rows_in_node+1) * sizeof(int), cudaMemcpyHostToDevice);
   cudaMemcpy(devPtrCsrColIdx, col_idx, nnz * sizeof(int), cudaMemcpyHostToDevice);
+
+  cudaMemcpy(devPtrVj, v[0], N * sizeof(T), cudaMemcpyHostToDevice);
+  cudaMemcpy(devPtrVj + N, v[1], N * sizeof(T), cudaMemcpyHostToDevice);
 
 #ifdef CUDA_DEBUG
   cerr << "CUDA initialization time: " << MPI_Wtime() - start_t << "s\n";
@@ -350,32 +356,33 @@ void lanczos_csr_cuda (
   for ( int j = 1; j < M; j++ )
   {
     // Compute local alpha of the current iteration
-    //sparse_csr_mdotv<T>(data, row_ptr, col_idx, rows_in_node, v[j], N, scratch);
 #ifdef CUDA_DEBUG
-    start_t = MPI_Wtime();
+    sparse_csr_mdotv<T>(data, row_ptr, col_idx, rows_in_node, v[j], N, scratch);
 #endif
-    cudaMemcpy(devPtrVj, v[j], N * sizeof(T), cudaMemcpyHostToDevice);
-#ifdef CUDA_DEBUG
-    cuda_copy_time += MPI_Wtime() - start_t;
-#endif
-    cusparseTcsrmv(cusparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE, rows_per_node,
+    cusparseTcsrmv(cusparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE, rows_in_node,
                    N, nnz, &one, descr, devPtrCsrData, devPtrCsrRowPtr, devPtrCsrColIdx,
-                   devPtrVj, &zero, devPtrScratch);
+                   devPtrVj + j*N, &zero, devPtrScratch);
 
-/*#ifdef CUDA_DEBUG
+#ifdef CUDA_DEBUG
     T temp[rows_in_node];
     cudaMemcpy(temp, devPtrScratch, rows_in_node * sizeof(T), cudaMemcpyDeviceToHost);
 
     T maxdiff = 0.;
+    T maxvalue = 0.;
+    T minvalue = 0.;
     for ( int k = 0; k < rows_in_node; k++ )
+    {
       maxdiff = max(maxdiff, abs(temp[k] - scratch[k]));
+      maxvalue = max(maxvalue, abs(scratch[k]));
+      minvalue = min(minvalue, abs(scratch[k]));
+    }
+
     cerr << "Max diff b/w CUDA and CPU: " << maxdiff << "\n";
-#endif*/
+    cerr << "Max CPU value: " << maxvalue << "\n";
+    cerr << "Min CPU value: " << minvalue << "\n";
+#endif
 
-    //cublasSetVector (rows_in_node, sizeof(T), scratch, 1, devPtrScratch, 1); // needed if sparse_csr_mdotv is used
-
-    //alpha[j] = dense_vdotv<T>(scratch, rows_in_node, v[j] + local_start_index);
-    cublasTdot(handle, rows_in_node, devPtrScratch, 1, devPtrVj+local_start_index,
+    cublasTdot(handle, rows_in_node, devPtrScratch, 1, devPtrVj + j*N + local_start_index,
                1, &alpha[j]);
 
     // Reduce sum alphas of different nodes to obtain alpha, then broadcast it back
@@ -383,45 +390,29 @@ void lanczos_csr_cuda (
     MPI_Allreduce(&alpha[j], &res, 1, mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
     alpha[j] = res;
 
+#ifdef DEBUG
+    cerr << "alpha[" << j << "] = " << alpha[j] << "\n";
+#endif
+
     // Orthogonalize against past 2 vectors v[j], v[j-1]
     // Need to take care to subtract the right subpart of the arrays for each node
-    //daxpy<T>(scratch, -alpha[j], v[j]+local_start_index, scratch, rows_in_node);
     devAlpha = -alpha[j];
-#ifdef CUDA_DEBUG
-    start_t = MPI_Wtime();
-#endif
-    cublasSetVector(rows_in_node, sizeof(T), v[j]+local_start_index, 1, devPtrX, 1);
-#ifdef CUDA_DEBUG
-    cuda_copy_time += MPI_Wtime() - start_t;
-#endif
-    cublasTaxpy(handle, rows_in_node, &devAlpha, devPtrX, 1, devPtrScratch, 1);
+    cublasTaxpy(handle, rows_in_node, &devAlpha, devPtrVj + j*N + local_start_index,
+                1, devPtrScratch, 1);
 
-    //daxpy<T>(scratch, -beta[j], v[j-1]+local_start_index, scratch, rows_in_node);
     devAlpha = -beta[j];
-#ifdef CUDA_DEBUG
-    start_t = MPI_Wtime();
-#endif
-    cublasSetVector(rows_in_node, sizeof(T), v[j-1]+local_start_index, 1, devPtrX, 1);
-#ifdef CUDA_DEBUG
-    cuda_copy_time += MPI_Wtime() - start_t;
-#endif
-    cublasTaxpy(handle, rows_in_node, &devAlpha, devPtrX, 1, devPtrScratch, 1);
-
-#ifdef CUDA_DEBUG
-    start_t = MPI_Wtime();
-#endif
-    // get scratch from GPU
-    cublasGetVector (rows_in_node, sizeof(T), devPtrScratch, 1, scratch, 1);
-
-#ifdef CUDA_DEBUG
-    cuda_copy_time += MPI_Wtime() - start_t;
-#endif
+    cublasTaxpy(handle, rows_in_node, &devAlpha, devPtrVj + (j-1)*N + local_start_index,
+                1, devPtrScratch, 1);
 
     // Store normalization constant as beta[j+1]
     cublasTdot(handle, rows_in_node, devPtrScratch, 1, devPtrScratch,
                1, &beta[j+1]);
     MPI_Allreduce(&beta[j+1], &res, 1, mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
     beta[j+1] = sqrt(res);
+
+#ifdef DEBUG
+    cerr << "beta[" << j+1 << "] = " << beta[j+1] << "\n";
+#endif
 
     if ( fabs(beta[j+1] - 0) < EPS )
     {
@@ -441,15 +432,21 @@ void lanczos_csr_cuda (
 
     re_orthogonalize<T> ( v, to_reorthogonalize, local_start_index, rows_in_node,
                           omega, scratch, epsilon, sqrteps, j, mpi_datatype, beta, N,
-                          dot_prods, dot_prods_reduced );
+                          dot_prods, dot_prods_reduced, handle, devPtrVj, devPtrScratch );
 
     // Normalize the vector
-    for ( int k = local_start_index; k < local_start_index + rows_in_node; k++ )
-      scratch[k-local_start_index] = v[j+1][k]/beta[j+1];
+    T betainv = 1.0d / beta[j+1];
+    cublasTscal(handle, rows_in_node, &betainv, devPtrScratch, 1);
+
+    // Get the normalized, re-orthogonalized vector from device memory
+    cublasGetVector (rows_in_node, sizeof(T), devPtrScratch, 1, scratch, 1);
 
     // Gather and form the new array v[j+1] on each node
     MPI_Allgather ( scratch, rows_per_node, mpi_datatype, v[j+1], rows_per_node,
                     mpi_datatype, MPI_COMM_WORLD );
+
+    // Copy the gathered array onto device memory for later use
+    cudaMemcpy ( devPtrVj + (j+1)*N, v[j+1], N * sizeof(T), cudaMemcpyHostToDevice);
 
     // Wow! Invariant subspace was found
     if ( fabs(beta[j+1] - 0) < EPS )
@@ -461,12 +458,9 @@ void lanczos_csr_cuda (
   }
 
   // Compute the last remaining alpha[M]
-  //sparse_csr_mdotv<T>(data, row_ptr, col_idx, rows_in_node, v[M], N, v[M+1]);
-  //alpha[M] = dense_vdotv<T>(v[M+1], rows_in_node, v[M] + local_start_index);
-  cudaMemcpy(devPtrVj, v[M], N * sizeof(int), cudaMemcpyHostToDevice);
-  cusparseTcsrmv(cusparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE, rows_per_node,
+  cusparseTcsrmv(cusparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE, rows_in_node,
                  N, nnz, &one, descr, devPtrCsrData, devPtrCsrRowPtr, devPtrCsrColIdx,
-                 devPtrVj, &zero, devPtrScratch);
+                 devPtrVj + M*N, &zero, devPtrScratch);
 
   cublasTdot(handle, rows_in_node, devPtrScratch, 1, devPtrVj+local_start_index,
              1, &alpha[M]);
@@ -669,7 +663,7 @@ void lanczos_csc_cuda ( T *data, int *col_ptr, int *row_idx, int N, int cols_in_
 
     re_orthogonalize<T> ( v, to_reorthogonalize, 0, cols_in_node, omega, scratch,
                           epsilon, sqrteps, j, mpi_datatype, beta, N, dot_prods,
-                          dot_prods_reduced );
+                          dot_prods_reduced, NULL, NULL, NULL );
 
     // Normalize the local portion of the vector
     for ( int k = 0; k < cols_in_node; k++ )
