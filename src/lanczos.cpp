@@ -407,7 +407,7 @@ template void lanczos_csr (
  *   beta_out - The off-diagonal elements of the tri-diagonal matrix
  *   v_out - The produced intermediate orthonormal Lanczos vectors (MxN size)
  */
-/*template <typename T>
+template <typename T>
 void lanczos_csc ( T *data, int *col_ptr, int *row_idx, int N, int cols_in_node,
                    int cols_per_node, int local_start_index, int M,
                    MPI_Datatype mpi_datatype, T **alpha_out, T **beta_out,
@@ -421,7 +421,7 @@ void lanczos_csc ( T *data, int *col_ptr, int *row_idx, int N, int cols_in_node,
   // Determine the square root of the machine precision for re-orthogonalization
   T epsilon = numeric_limits<T>::epsilon();
   T sqrteps = sqrt(epsilon);
-  T eta = pow(epsilon, 0.75);
+  eta = pow(epsilon, 0.75);
 
   // The distributed intermediate vectors v
   int vsize = cols_per_node;
@@ -525,32 +525,16 @@ void lanczos_csc ( T *data, int *col_ptr, int *row_idx, int N, int cols_in_node,
     else
       prev_reorthogonalized = false;
 
-    // Re-orthogonalize against these range of vectors, performing updates on
-    // local parts only. Will synchronize at the end.
-    for ( int k = 0; k < to_reorthogonalize.size(); k++ )
-    {
-      int index = to_reorthogonalize[k];
-      T temp;
-      T temp_local = dense_vdotv<T>(v[j+1], cols_in_node, v[index]);
-      MPI_Allreduce(&temp_local, &temp, 1, mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
-      daxpy<T>(v[j+1], -temp, v[index], v[j+1], cols_in_node);
-      // Update estimate after this vector has been re-normalized
-      omega[j+1][index] = epsilon * random_normal(0, 1.5);
-    }
+    re_orthogonalize<T> ( v, to_reorthogonalize, 0, cols_in_node, omega, scratch,
+                          epsilon, sqrteps, j, mpi_datatype, beta, N );
 
-    if ( to_reorthogonalize.size() > 0 )
-    {
-      // Need to re-normalize v[j+1] and store normalization constant as beta[j+1]
-      beta_local = 0.;
-      for ( int k = 0; k < cols_in_node; k++ )
-        beta_local += v[j+1][k]*v[j+1][k];
-      MPI_Allreduce(&beta_local, &beta[j+1], 1, mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
-      beta[j+1] = sqrt(beta[j+1]);
+    // Normalize the local portion of the vector
+    for ( int k = 0; k < cols_in_node; k++ )
+      v[j+1][k] /= beta[j+1];
 
-      // Normalize the local portion of the vector
-      for ( int k = 0; k < cols_in_node; k++ )
-        v[j+1][k] /= beta[j+1];
-    }
+    // Found an invariant subspace, so break
+    if ( fabs(beta[j+1] - 0) < EPS )
+      break;
 
     if ( !prev_reorthogonalized )
       to_reorthogonalize.clear();
@@ -566,25 +550,22 @@ void lanczos_csc ( T *data, int *col_ptr, int *row_idx, int N, int cols_in_node,
   T alpha_local = dense_vdotv<T>(v[N+1], cols_in_node, v[N]);
   MPI_Allreduce(&alpha_local, &alpha[N], 1, mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
 
-  double tri_diagonalization_time = MPI_Wtime();
+  // Copy the alphas and betas into output variables
+  *alpha_out = new T[M+1];
+  *beta_out = new T[M+1];
 
-  if ( rank == 0 )
-    for ( int i = 1; i <= N; i++ )
-      cout << alpha[i] << " " << beta[i] << "\n";
+  memcpy ( *alpha_out, alpha + 1, M * sizeof(T) );
+  memcpy ( *beta_out, beta + 2, M * sizeof(T) );
 
-  cerr << "Data load time: " << data_load_time - start_time << "\n";
-  cerr << "Initialization time: " << initialization_time - data_load_time << "\n";
-  cerr << "Loop time: " << tri_diagonalization_time - initialization_time << "\n";
+  // Assign pointers to the intermediate vectors
+  for ( int i = 1; i <= M; i++ )
+    (*v_out)[i-1] = v[i];
 
-  delete v_data;
   delete v;
   delete alpha;
   delete beta;
   delete scratch;
   delete omega_data;
   delete omega;
-
-  MPI_Finalize();
-  return 0;
-}*/
+}
 

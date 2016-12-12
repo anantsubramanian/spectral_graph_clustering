@@ -5,11 +5,17 @@ default:
 	nvcc -arch=sm_20 -c multiply.cu -o multiply.o
 	mpic++ test_construction.o graph.o utils.o multiply.o -lcudart -L/usr/local/cuda/lib64/ -o test_construction -lcublas
 
-all: run_test_construction run_spectral_clustering run_lanczos_mpi_cuda_csr
+all: run_test_construction run_spectral_clustering # run_lanczos_mpi_cuda_csr
 
 run_spectral_clustering: spectral_clustering
-	mpirun -np 1 spectral_clustering > spectral_output_1
-	mpirun -np 8 spectral_clustering > spectral_output_8
+	mpirun -np 1 spectral_clustering ../data/as20000102_row.txt 0 200 > \
+		spectral_output_csr_1
+	mpirun -np 8 spectral_clustering ../data/as20000102_row.txt 0 200 > \
+		spectral_output_csr_8
+	mpirun -np 1 spectral_clustering ../data/as20000102_col.txt 1 200 > \
+		spectral_output_csc_1
+	mpirun -np 8 spectral_clustering ../data/as20000102_col.txt 1 200 > \
+		spectral_output_csc_8
 
 spectral_clustering: spectral_clustering.cpp lanczos.cpp headers/lanczos.hpp \
 	headers/graph.hpp graph.cpp headers/utils.hpp utils.cpp
@@ -29,6 +35,7 @@ test_construction: test_construction.cpp graph.cpp utils.cpp headers/graph.hpp h
 	mpic++ test_construction.cpp graph.cpp utils.cpp -o test_construction
 
 clean:
-	rm spectral_clustering lanczos_mpi_cuda_csr test_construction spectral_output_1 \
-		spectral_output_8 latedays.qsub.* *.o
+	rm spectral_clustering lanczos_mpi_cuda_csr test_construction spectral_output_csc_1 \
+		spectral_output_csc_8 spectral_output_csr_1 spectral_output_csr_8 latedays.qsub.* \
+		*.o
 
