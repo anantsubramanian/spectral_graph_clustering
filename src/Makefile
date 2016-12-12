@@ -16,18 +16,18 @@ run_spectral_clustering: spectral_clustering
 		spectral_output_csc_1
 	mpirun -np 8 spectral_clustering ../data/as20000102_col.txt 1 200 > \
 		spectral_output_csc_8
-	mpirun -np 1 spectral_clustering ../data/Gowalla_200k_nodes_row.txt 0 1500 > \
-		spectral_output_csr_big_1
-	mpirun -np 8 spectral_clustering ../data/Gowalla_200k_nodes_row.txt 0 1500 > \
-		spectral_output_csr_big_8
 	mpirun -np 1 spectral_clustering ../data/Gowalla_200k_nodes_col.txt 1 1500 > \
 		spectral_output_csc_big_1
 	mpirun -np 8 spectral_clustering ../data/Gowalla_200k_nodes_col.txt 1 1500 > \
 		spectral_output_csc_big_8
+	mpirun -np 1 spectral_clustering ../data/Gowalla_200k_nodes_row.txt 0 1500 > \
+		spectral_output_csr_big_1
+	mpirun -np 8 spectral_clustering ../data/Gowalla_200k_nodes_row.txt 0 1500 > \
+		spectral_output_csr_big_8
 
 spectral_clustering: spectral_clustering.cpp lanczos.cpp headers/lanczos.hpp \
 	headers/graph.hpp graph.cpp headers/utils.hpp utils.cpp
-	mpic++ spectral_clustering.cpp utils.cpp graph.cpp lanczos.cpp -o spectral_clustering -llapack -lblas -lgfortran
+	mpic++ spectral_clustering.cpp utils.cpp graph.cpp lanczos.cpp -o spectral_clustering -L/usr/lib64/atlas-sse3/ -llapack -lcblas -lgfortran
 
 run_lanczos_mpi_cuda_csr: lanczos_mpi_cuda_csr
 	mpirun -np 1 lanczos_mpi_cuda_csr

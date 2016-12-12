@@ -125,7 +125,13 @@ int main ( int argc, char *argv[] )
   if ( argc != 4 )
   {
     if ( rank == MASTER )
+    {
+      cerr << "Given: ";
+      for ( int k = 0; k < argc; k++ )
+        cerr << argv[k] << " ";
+      cerr << "\n\n";
       print_usage();
+    }
     MPI_Finalize();
     return 1;
   }
