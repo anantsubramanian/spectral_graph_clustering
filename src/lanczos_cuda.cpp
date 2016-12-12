@@ -29,6 +29,7 @@
 // Uncomment to print debug statements, true orthogonality of intermediate vectors
 // and estimates through the recurrence relation.
 //#define DEBUG
+#define CUDA_DEBUG
 
 using namespace std;
 
@@ -294,6 +295,12 @@ void lanczos_csr_cuda (
   vector<int> to_reorthogonalize;
   bool prev_reorthogonalized = false;
 
+#ifdef CUDA_DEBUG
+  // Variable used for timing purposes
+  double start_t;
+  start_t = MPI_Wtime();
+#endif
+
   cublasHandle_t handle;
   cublasCreate(&handle);
 
@@ -312,7 +319,7 @@ void lanczos_csr_cuda (
   cusparseMatDescr_t descr = 0;
   cusparseCreate(&cusparse_handle);
 
-  cusparseCreateMatDescr(&descr); 
+  cusparseCreateMatDescr(&descr);
   cusparseSetMatType(descr, CUSPARSE_MATRIX_TYPE_GENERAL);
   cusparseSetMatIndexBase(descr, CUSPARSE_INDEX_BASE_ZERO);
 
@@ -334,15 +341,36 @@ void lanczos_csr_cuda (
   cudaMemcpy(devPtrCsrRowPtr, row_ptr, (rows_per_node+1) * sizeof(int), cudaMemcpyHostToDevice);
   cudaMemcpy(devPtrCsrColIdx, col_idx, nnz * sizeof(int), cudaMemcpyHostToDevice);
 
+#ifdef CUDA_DEBUG
+  cerr << "CUDA initialization time: " << MPI_Wtime() - start_t << "s\n";
+  double cuda_copy_time = 0.;
+#endif
+
   // Start main Lanczos loop to compute the tri-diagonal elements, alpha[i] and beta[i]
   for ( int j = 1; j < M; j++ )
   {
     // Compute local alpha of the current iteration
     //sparse_csr_mdotv<T>(data, row_ptr, col_idx, rows_in_node, v[j], N, scratch);
-    cudaMemcpy(devPtrVj, v[j], N * sizeof(int), cudaMemcpyHostToDevice);
+#ifdef CUDA_DEBUG
+    start_t = MPI_Wtime();
+#endif
+    cudaMemcpy(devPtrVj, v[j], N * sizeof(T), cudaMemcpyHostToDevice);
+#ifdef CUDA_DEBUG
+    cuda_copy_time += MPI_Wtime() - start_t;
+#endif
     cusparseTcsrmv(cusparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE, rows_per_node,
                    N, nnz, &one, descr, devPtrCsrData, devPtrCsrRowPtr, devPtrCsrColIdx,
                    devPtrVj, &zero, devPtrScratch);
+
+/*#ifdef CUDA_DEBUG
+    T temp[rows_in_node];
+    cudaMemcpy(temp, devPtrScratch, rows_in_node * sizeof(T), cudaMemcpyDeviceToHost);
+
+    T maxdiff = 0.;
+    for ( int k = 0; k < rows_in_node; k++ )
+      maxdiff = max(maxdiff, abs(temp[k] - scratch[k]));
+    cerr << "Max diff b/w CUDA and CPU: " << maxdiff << "\n";
+#endif*/
 
     //cublasSetVector (rows_in_node, sizeof(T), scratch, 1, devPtrScratch, 1); // needed if sparse_csr_mdotv is used
 
@@ -359,16 +387,35 @@ void lanczos_csr_cuda (
     // Need to take care to subtract the right subpart of the arrays for each node
     //daxpy<T>(scratch, -alpha[j], v[j]+local_start_index, scratch, rows_in_node);
     devAlpha = -alpha[j];
+#ifdef CUDA_DEBUG
+    start_t = MPI_Wtime();
+#endif
     cublasSetVector(rows_in_node, sizeof(T), v[j]+local_start_index, 1, devPtrX, 1);
+#ifdef CUDA_DEBUG
+    cuda_copy_time += MPI_Wtime() - start_t;
+#endif
     cublasTaxpy(handle, rows_in_node, &devAlpha, devPtrX, 1, devPtrScratch, 1);
 
     //daxpy<T>(scratch, -beta[j], v[j-1]+local_start_index, scratch, rows_in_node);
     devAlpha = -beta[j];
+#ifdef CUDA_DEBUG
+    start_t = MPI_Wtime();
+#endif
     cublasSetVector(rows_in_node, sizeof(T), v[j-1]+local_start_index, 1, devPtrX, 1);
+#ifdef CUDA_DEBUG
+    cuda_copy_time += MPI_Wtime() - start_t;
+#endif
     cublasTaxpy(handle, rows_in_node, &devAlpha, devPtrX, 1, devPtrScratch, 1);
 
+#ifdef CUDA_DEBUG
+    start_t = MPI_Wtime();
+#endif
     // get scratch from GPU
     cublasGetVector (rows_in_node, sizeof(T), devPtrScratch, 1, scratch, 1);
+
+#ifdef CUDA_DEBUG
+    cuda_copy_time += MPI_Wtime() - start_t;
+#endif
 
     // Store normalization constant as beta[j+1]
     cublasTdot(handle, rows_in_node, devPtrScratch, 1, devPtrScratch,
@@ -433,6 +480,10 @@ void lanczos_csr_cuda (
   for ( int j = 1; j < M; j++ )
     for ( int k = 1; k <= j; k++ )
       cerr << "orth(" << j << "," << k <<") = " << dense_vdotv<T>(v[j], N, v[k]) << "\n";
+#endif
+
+#ifdef CUDA_DEBUG
+  cerr << "Total time spent on copying data to/from GPU: " << cuda_copy_time << "s\n";
 #endif
 
   *alpha_out = new T[M+1];
