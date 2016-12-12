@@ -217,10 +217,11 @@ void re_orthogonalize ( T **v, vector<int> &to_reorthogonalize, int local_start_
  *   v_out - The produced intermediate orthonormal Lanczos vectors (MxN size)
  */
 template <typename T>
-void lanczos_csr_cuda ( T *data, int *row_ptr, int *col_idx, int nnz, int N, int rows_in_node,
-                   int rows_per_node, int local_start_index, int M,
-                   MPI_Datatype mpi_datatype, T **alpha_out, T **beta_out,
-                   T ***v_out, T eta )
+void lanczos_csr_cuda (
+    T *data, int *row_ptr, int *col_idx, int nnz, int N, int rows_in_node,
+    int rows_per_node, int local_start_index, int M,
+    MPI_Datatype mpi_datatype, T **alpha_out, T **beta_out,
+    T ***v_out, T eta )
 {
   int rank, num_tasks;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -296,58 +297,58 @@ void lanczos_csr_cuda ( T *data, int *row_ptr, int *col_idx, int nnz, int N, int
   cublasHandle_t handle;
   cublasCreate(&handle);
 
-
   T *devPtrX , *devPtrScratch, *devPtrNextBeta;
-  T *devPtrTestScratch;
   T *devPtrCsrData;
   int *devPtrCsrRowPtr, *devPtrCsrColIdx;
   T *devPtrVj;
 
   T devAlpha;
 
-  cudaMalloc( (void**) &devPtrX, rows_in_node * sizeof(T));	// vector A
-  cudaMalloc( (void**) &devPtrNextBeta, sizeof(T));
+  cudaMalloc( (void**) &devPtrX, rows_in_node * sizeof(T) );	// vector A
+  cudaMalloc( (void**) &devPtrNextBeta, sizeof(T) );
 
   // cusparse init
-  cusparseHandle_t cusparse_handle=0;
-  cusparseMatDescr_t descr=0;
+  cusparseHandle_t cusparse_handle = 0;
+  cusparseMatDescr_t descr = 0;
   cusparseCreate(&cusparse_handle);
 
   cusparseCreateMatDescr(&descr); 
-  cusparseSetMatType(descr,CUSPARSE_MATRIX_TYPE_GENERAL);
-  cusparseSetMatIndexBase(descr,CUSPARSE_INDEX_BASE_ZERO);
+  cusparseSetMatType(descr, CUSPARSE_MATRIX_TYPE_GENERAL);
+  cusparseSetMatIndexBase(descr, CUSPARSE_INDEX_BASE_ZERO);
 
   T one = 1;
   T zero = 0;
 
   // for CSR
-  cudaMalloc( (void**) &devPtrCsrData, nnz * sizeof(T));
-  cudaMalloc( (void**) &devPtrCsrRowPtr, (rows_per_node + 1) * sizeof(int));
-  cudaMalloc( (void**) &devPtrCsrColIdx, nnz * sizeof(int));
-  cudaMalloc( (void**) &devPtrVj, rows_per_node * sizeof(T));
+  cudaMalloc( (void**) &devPtrCsrData, nnz * sizeof(T) );
+  cudaMalloc( (void**) &devPtrCsrRowPtr, (rows_per_node + 1) * sizeof(int) );
+  cudaMalloc( (void**) &devPtrCsrColIdx, nnz * sizeof(int) );
+  cudaMalloc( (void**) &devPtrVj, rows_per_node * sizeof(T) );
 
   // for scratch vector
-  cudaMalloc( (void**) &devPtrScratch, rows_per_node * sizeof(T));		// vector scratch
+  cudaMalloc( (void**) &devPtrScratch, rows_per_node * sizeof(T) );
+
+  // The matrix doesn't change. It only needs to be copied into the memory once before
+  // the loop.
+  cudaMemcpy(devPtrCsrData, data, nnz * sizeof(T), cudaMemcpyHostToDevice);
+  cudaMemcpy(devPtrCsrRowPtr, row_ptr, (rows_per_node+1) * sizeof(int), cudaMemcpyHostToDevice);
+  cudaMemcpy(devPtrCsrColIdx, col_idx, nnz * sizeof(int), cudaMemcpyHostToDevice);
 
   // Start main Lanczos loop to compute the tri-diagonal elements, alpha[i] and beta[i]
   for ( int j = 1; j < M; j++ )
   {
     // Compute local alpha of the current iteration
-    
     //sparse_csr_mdotv<T>(data, row_ptr, col_idx, rows_in_node, v[j], N, scratch);
-    cudaMemcpy(devPtrCsrData, data, nnz * sizeof(T), cudaMemcpyHostToDevice);
-    cudaMemcpy(devPtrCsrRowPtr, row_ptr, (rows_per_node+1) * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(devPtrCsrColIdx, col_idx, nnz * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(devPtrVj, v[j], rows_per_node * sizeof(int), cudaMemcpyHostToDevice);
-    cusparseTcsrmv(cusparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE, rows_per_node, N, nnz, &one, descr,
-        devPtrCsrData, devPtrCsrRowPtr, devPtrCsrColIdx, devPtrVj, &zero, devPtrScratch);
+    cudaMemcpy(devPtrVj, v[j], N * sizeof(int), cudaMemcpyHostToDevice);
+    cusparseTcsrmv(cusparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE, rows_per_node,
+                   N, nnz, &one, descr, devPtrCsrData, devPtrCsrRowPtr, devPtrCsrColIdx,
+                   devPtrVj, &zero, devPtrScratch);
 
     //cublasSetVector (rows_in_node, sizeof(T), scratch, 1, devPtrScratch, 1); // needed if sparse_csr_mdotv is used
 
-    
     //alpha[j] = dense_vdotv<T>(scratch, rows_in_node, v[j] + local_start_index);
-    cublasTdot(handle, rows_in_node, devPtrScratch, 1, devPtrVj + local_start_index, 1, &alpha[j]);
-    
+    cublasTdot(handle, rows_in_node, devPtrScratch, 1, devPtrVj+local_start_index,
+               1, &alpha[j]);
 
     // Reduce sum alphas of different nodes to obtain alpha, then broadcast it back
     T res;
@@ -356,24 +357,22 @@ void lanczos_csr_cuda ( T *data, int *row_ptr, int *col_idx, int nnz, int N, int
 
     // Orthogonalize against past 2 vectors v[j], v[j-1]
     // Need to take care to subtract the right subpart of the arrays for each node
-
     //daxpy<T>(scratch, -alpha[j], v[j]+local_start_index, scratch, rows_in_node);
     devAlpha = -alpha[j];
-    cublasSetVector( rows_in_node, sizeof(T), v[j] + local_start_index, 1, devPtrX, 1);
+    cublasSetVector(rows_in_node, sizeof(T), v[j]+local_start_index, 1, devPtrX, 1);
     cublasTaxpy(handle, rows_in_node, &devAlpha, devPtrX, 1, devPtrScratch, 1);
 
     //daxpy<T>(scratch, -beta[j], v[j-1]+local_start_index, scratch, rows_in_node);
     devAlpha = -beta[j];
-    cublasSetVector( rows_in_node, sizeof(T), v[j-1] + local_start_index, 1, devPtrX, 1);
+    cublasSetVector(rows_in_node, sizeof(T), v[j-1]+local_start_index, 1, devPtrX, 1);
     cublasTaxpy(handle, rows_in_node, &devAlpha, devPtrX, 1, devPtrScratch, 1);
 
     // get scratch from GPU
     cublasGetVector (rows_in_node, sizeof(T), devPtrScratch, 1, scratch, 1);
 
     // Store normalization constant as beta[j+1]
-    beta[j+1] = 0;
-    for ( int k = 0; k < rows_in_node; k++ )
-      beta[j+1] += scratch[k]*scratch[k];
+    cublasTdot(handle, rows_in_node, devPtrScratch, 1, devPtrScratch,
+               1, &beta[j+1]);
     MPI_Allreduce(&beta[j+1], &res, 1, mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
     beta[j+1] = sqrt(res);
 
@@ -415,8 +414,15 @@ void lanczos_csr_cuda ( T *data, int *row_ptr, int *col_idx, int nnz, int N, int
   }
 
   // Compute the last remaining alpha[M]
-  sparse_csr_mdotv<T>(data, row_ptr, col_idx, rows_in_node, v[M], N, v[M+1]);
-  alpha[M] = dense_vdotv<T>(v[M+1], rows_in_node, v[M] + local_start_index);
+  //sparse_csr_mdotv<T>(data, row_ptr, col_idx, rows_in_node, v[M], N, v[M+1]);
+  //alpha[M] = dense_vdotv<T>(v[M+1], rows_in_node, v[M] + local_start_index);
+  cudaMemcpy(devPtrVj, v[M], N * sizeof(int), cudaMemcpyHostToDevice);
+  cusparseTcsrmv(cusparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE, rows_per_node,
+                 N, nnz, &one, descr, devPtrCsrData, devPtrCsrRowPtr, devPtrCsrColIdx,
+                 devPtrVj, &zero, devPtrScratch);
+
+  cublasTdot(handle, rows_in_node, devPtrScratch, 1, devPtrVj+local_start_index,
+             1, &alpha[M]);
 
   // Reduce sum alphas of different nodes to obtain alpha, then broadcast it back
   T res;

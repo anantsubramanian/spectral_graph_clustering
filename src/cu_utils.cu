@@ -49,7 +49,7 @@ cublasStatus_t cublasTscal (
   return cublasDscal(handle, n, alpha, x, incx);
 }
 
-// cuBLAS dot product 
+// cuBLAS dot product
 cublasStatus_t cublasTdot (
     cublasHandle_t handle, int n, const float *x, int incx, const float *y, int incy,
     float *result )
@@ -80,7 +80,7 @@ cublasStatus_t cublasTaxpy (
   return cublasDaxpy(handle, n, alpha, x, incx, y, incy);
 }
 
-// cuSparse mv  
+// cuSparse mv
 cusparseStatus_t cusparseTcsrmv(
     cusparseHandle_t handle, cusparseOperation_t transA, int m, int n, int nnz,
     const float *alpha, const cusparseMatDescr_t descrA, const float *csrValA,

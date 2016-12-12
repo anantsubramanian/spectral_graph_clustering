@@ -37,4 +37,4 @@ if [ ! -f "./spectral_clustering" ]; then
 fi
 
 # Submit the job.  No need to modify this.
-qsub -l walltime=0:$WALLTIME:00,nodes=$NODES:ppn=$TOTAL_PROCESSORS_PER_NODE -F "$NODES $PROCESSORS_PER_NODE $INPUT_FILE $MODE $M" latedays.qsub
+qsub -q tesla -l walltime=0:$WALLTIME:00,nodes=$NODES:ppn=$TOTAL_PROCESSORS_PER_NODE -F "$NODES $PROCESSORS_PER_NODE $INPUT_FILE $MODE $M" latedays.qsub
