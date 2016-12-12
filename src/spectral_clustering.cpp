@@ -8,6 +8,7 @@
   #include "headers/graph.hpp"
 #endif
 #include "headers/lanczos.hpp"
+#include "headers/lanczos_cuda.hpp"
 
 // Working with single precision arithmetic can be risky.
 #define DATATYPE double
@@ -48,6 +49,50 @@ void run_lanczos_csr ( char *input_file, int M, DATATYPE **alpha_out,
   double lanczos_start_time = MPI_Wtime();
   // Replace with appropriate call if using different matrix distribution
   lanczos_csr <DATATYPE> ( data, row_ptr, col_idx, N, rows_in_node, rows_per_node,
+                           local_start_index, M, MPIDATATYPE, &alpha, &beta, &v );
+  double lanczos_end_time = MPI_Wtime();
+
+  if ( rank == MASTER )
+    cerr << "Lanczos run time: " << lanczos_end_time - lanczos_start_time << "s\n";
+
+  *alpha_out = alpha;
+  *beta_out = beta;
+  *v_out = v;
+}
+
+void run_lanczos_csr_cuda ( char *input_file, int M, DATATYPE **alpha_out,
+                       DATATYPE **beta_out, DATATYPE ***v_out, int rank )
+{
+  double start_time = MPI_Wtime();
+
+  // Load distributed graph from edgelist file, and construct
+  // the unnormalized Laplacian
+  ifstream fin(input_file);
+  distributed_graph_csr<DATATYPE> *input_graph =
+    create_csr_from_edgelist_file<DATATYPE>(fin);
+  input_graph -> construct_unnormalized_laplacian();
+  input_graph -> free_adjacency_matrix();
+
+  double data_load_time = MPI_Wtime();
+  if ( rank == MASTER )
+    cerr << "Data load time: " << data_load_time - start_time << "s\n";
+
+  // Get distributed Laplacian CSR submatrices
+  DATATYPE *data = input_graph -> get_lap_A();
+  int *row_ptr = input_graph -> get_lap_row_ptr();
+  int *col_idx = input_graph -> get_lap_col_idx();
+  int nnz = input_graph -> get_lap_nnz_local();
+  int N = input_graph -> get_N();
+  int rows_in_node = input_graph -> get_rows_in_node();
+  int rows_per_node = input_graph -> get_rows_per_node();
+  int local_start_index = input_graph -> get_row_start_index();
+
+  DATATYPE *alpha, *beta;
+  DATATYPE **v = new DATATYPE*[M];
+
+  double lanczos_start_time = MPI_Wtime();
+  // Replace with appropriate call if using different matrix distribution
+  lanczos_csr_cuda <DATATYPE> ( data, row_ptr, col_idx, nnz, N, rows_in_node, rows_per_node,
                            local_start_index, M, MPIDATATYPE, &alpha, &beta, &v );
   double lanczos_end_time = MPI_Wtime();
 
@@ -140,6 +185,8 @@ int main ( int argc, char *argv[] )
     case '0': run_lanczos_csr ( argv[1], M, &alpha, &beta, &v, rank );
               break;
     case '1': run_lanczos_csc ( argv[1], M, &alpha, &beta, &v, rank );
+              break;
+    case '2': run_lanczos_csr_cuda ( argv[1], M, &alpha, &beta, &v, rank );
               break;
     default: if ( rank == MASTER ) print_usage();
              MPI_Finalize();

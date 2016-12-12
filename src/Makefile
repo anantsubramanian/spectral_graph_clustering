@@ -33,6 +33,17 @@ run_lanczos_mpi_cuda_csr: lanczos_mpi_cuda_csr
 	mpirun -np 1 lanczos_mpi_cuda_csr
 	#mpirun -np 8 lanczos_mpi_cuda_csr
 
+run_spectral_clustering_cuda: spectral_clustering_cuda
+	mpirun -np 1 spectral_clustering_cuda ../data/as20000102_row.txt 0 200 > \
+		spectral_output_csr_1
+
+spectral_clustering_cuda: spectral_clustering.cpp lanczos.cpp headers/lanczos.hpp lanczos_cuda.cpp headers/lanczos_cuda.hpp \
+	headers/graph.hpp graph.cpp headers/utils.hpp utils.cpp headers/cu_utils.h cu_utils.cu
+	nvcc spectral_clustering.cpp utils.cpp graph.cpp lanczos.cpp lanczos_cuda.cpp cu_utils.cu -o \
+		spectral_clustering_cuda -L /usr/lib64/atlas-sse3/ -llapack -lcblas -lgfortran -L/opt/openmpi/lib \
+		-lmpi_cxx -lmpi -libverbs -ldat -lrt -lnsl -lutil -lm -ldl -lm -lrt -lnsl -lutil -lm -ldl \
+		-lcublas -lcusparse -I/opt/openmpi/include
+
 lanczos_mpi_cuda_csr: lanczos_mpi_cuda_csr.cpp graph.cpp utils.cpp headers/graph.hpp headers/utils.hpp
 	nvcc lanczos_mpi_cuda_csr.cpp graph.cpp utils.cpp cu_utils.cu -L/opt/openmpi/lib -lmpi_cxx -lmpi -libverbs -ldat -lrt -lnsl -lutil -lm -ldl -lm -lrt -lnsl -lutil -lm -ldl -lcublas -lcusparse -I/opt/openmpi/include -o lanczos_mpi_cuda_csr
 

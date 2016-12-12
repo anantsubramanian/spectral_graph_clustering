@@ -13,6 +13,11 @@
 #include <algorithm>
 #include "mpi.h"
 #include "headers/utils.hpp"
+#include "cublas_v2.h"
+#include <cuda_runtime_api.h>
+#include <cuda.h>
+#include "cusparse.h"
+#include "headers/cu_utils.h"
 #ifndef __GRAPH
   #include "headers/graph.hpp"
 #endif
@@ -212,7 +217,7 @@ void re_orthogonalize ( T **v, vector<int> &to_reorthogonalize, int local_start_
  *   v_out - The produced intermediate orthonormal Lanczos vectors (MxN size)
  */
 template <typename T>
-void lanczos_csr ( T *data, int *row_ptr, int *col_idx, int N, int rows_in_node,
+void lanczos_csr_cuda ( T *data, int *row_ptr, int *col_idx, int nnz, int N, int rows_in_node,
                    int rows_per_node, int local_start_index, int M,
                    MPI_Datatype mpi_datatype, T **alpha_out, T **beta_out,
                    T ***v_out, T eta )
@@ -292,16 +297,16 @@ void lanczos_csr ( T *data, int *row_ptr, int *col_idx, int N, int rows_in_node,
   cublasCreate(&handle);
 
 
-  float *devPtrX , *devPtrScratch, *devPtrNextBeta;
-  float *devPtrTestScratch;
-  float *devPtrCsrData;
+  T *devPtrX , *devPtrScratch, *devPtrNextBeta;
+  T *devPtrTestScratch;
+  T *devPtrCsrData;
   int *devPtrCsrRowPtr, *devPtrCsrColIdx;
-  float *devPtrVj;
+  T *devPtrVj;
 
-  float devAlpha;
+  T devAlpha;
 
-  cudaMalloc( (void**) &devPtrX, rows_in_node * sizeof(float));	// vector A
-  cudaMalloc( (void**) &devPtrNextBeta, sizeof(float));
+  cudaMalloc( (void**) &devPtrX, rows_in_node * sizeof(T));	// vector A
+  cudaMalloc( (void**) &devPtrNextBeta, sizeof(T));
 
   // cusparse init
   cusparseHandle_t cusparse_handle=0;
@@ -312,30 +317,31 @@ void lanczos_csr ( T *data, int *row_ptr, int *col_idx, int N, int rows_in_node,
   cusparseSetMatType(descr,CUSPARSE_MATRIX_TYPE_GENERAL);
   cusparseSetMatIndexBase(descr,CUSPARSE_INDEX_BASE_ZERO);
 
-  float one = 1;
-  float zero = 0;
+  T one = 1;
+  T zero = 0;
 
   // for CSR
-  cudaMalloc( (void**) &devPtrCsrData, nnz * sizeof(float));
+  cudaMalloc( (void**) &devPtrCsrData, nnz * sizeof(T));
   cudaMalloc( (void**) &devPtrCsrRowPtr, (rows_per_node + 1) * sizeof(int));
   cudaMalloc( (void**) &devPtrCsrColIdx, nnz * sizeof(int));
-  cudaMalloc( (void**) &devPtrVj, rows_per_node * sizeof(float));
+  cudaMalloc( (void**) &devPtrVj, rows_per_node * sizeof(T));
 
   // for scratch vector
-  cudaMalloc( (void**) &devPtrScratch, rows_per_node * sizeof(float));		// vector scratch
+  cudaMalloc( (void**) &devPtrScratch, rows_per_node * sizeof(T));		// vector scratch
 
   // Start main Lanczos loop to compute the tri-diagonal elements, alpha[i] and beta[i]
   for ( int j = 1; j < M; j++ )
   {
     // Compute local alpha of the current iteration
     
-    //sparse_csr_mdotv<T>(data, row_ptr, col_idx, rows_in_node, v[j], N, scratch);
-    cudaMemcpy(devPtrCsrData, data, nnz * sizeof(DATATYPE), cudaMemcpyHostToDevice);
-    cudaMemcpy(devPtrCsrRowPtr, row_ptr, (rows_per_node+1) * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(devPtrCsrColIdx, col_idx, nnz * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(devPtrVj, v[j], rows_per_node * sizeof(int), cudaMemcpyHostToDevice);
-    cusparseScsrmv(cusparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE, rows_per_node, N, nnz, &one, descr,
-        devPtrCsrData, devPtrCsrRowPtr, devPtrCsrColIdx, devPtrVj, &zero, devPtrScratch);
+    sparse_csr_mdotv<T>(data, row_ptr, col_idx, rows_in_node, v[j], N, scratch);
+    //cudaMemcpy(devPtrCsrData, data, nnz * sizeof(T), cudaMemcpyHostToDevice);
+    //cudaMemcpy(devPtrCsrRowPtr, row_ptr, (rows_per_node+1) * sizeof(int), cudaMemcpyHostToDevice);
+    //cudaMemcpy(devPtrCsrColIdx, col_idx, nnz * sizeof(int), cudaMemcpyHostToDevice);
+    //cudaMemcpy(devPtrVj, v[j], rows_per_node * sizeof(int), cudaMemcpyHostToDevice);
+    //cusparseDcsrmv(cusparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE, rows_per_node, N, nnz, &one, descr,
+        //devPtrCsrData, devPtrCsrRowPtr, devPtrCsrColIdx, devPtrVj, &zero, devPtrScratch);
+    cublasSetVector (rows_in_node, sizeof(T), scratch, 1, devPtrScratch, 1);
 
     
     //alpha[j] = dense_vdotv<T>(scratch, rows_in_node, v[j] + local_start_index);
@@ -352,16 +358,16 @@ void lanczos_csr ( T *data, int *row_ptr, int *col_idx, int N, int rows_in_node,
 
     //daxpy<T>(scratch, -alpha[j], v[j]+local_start_index, scratch, rows_in_node);
     devAlpha = -alpha[j];
-    cublasSetVector( rows_in_node, sizeof(float), v[j] + local_start_index, 1, devPtrX, 1);
+    cublasSetVector( rows_in_node, sizeof(T), v[j] + local_start_index, 1, devPtrX, 1);
     cublasTaxpy(handle, rows_in_node, &devAlpha, devPtrX, 1, devPtrScratch, 1);
 
     //daxpy<T>(scratch, -beta[j], v[j-1]+local_start_index, scratch, rows_in_node);
     devAlpha = -beta[j];
-    cublasSetVector( rows_in_node, sizeof(float), v[j-1] + local_start_index, 1, devPtrX, 1);
+    cublasSetVector( rows_in_node, sizeof(T), v[j-1] + local_start_index, 1, devPtrX, 1);
     cublasTaxpy(handle, rows_in_node, &devAlpha, devPtrX, 1, devPtrScratch, 1);
 
     // get scratch from GPU
-    cublasGetVector (rows_in_node, sizeof(float), devPtrScratch, 1, scratch, 1);
+    cublasGetVector (rows_in_node, sizeof(T), devPtrScratch, 1, scratch, 1);
 
     // Store normalization constant as beta[j+1]
     beta[j+1] = 0;
@@ -443,13 +449,13 @@ void lanczos_csr ( T *data, int *row_ptr, int *col_idx, int N, int rows_in_node,
   delete omega;
 }
 
-template void lanczos_csr (
-    float *data, int *row_ptr, int *col_idx, int N, int rows_in_node,
+template void lanczos_csr_cuda (
+    float *data, int *row_ptr, int *col_idx, int nnz, int N, int rows_in_node,
     int rows_per_node, int local_start_index, int M, MPI_Datatype mpi_datatype,
     float **alpha_out, float **beta_out, float ***v_out, float eta );
 
-template void lanczos_csr (
-    double *data, int *row_ptr, int *col_idx, int N, int rows_in_node,
+template void lanczos_csr_cuda (
+    double *data, int *row_ptr, int *col_idx, int nnz, int N, int rows_in_node,
     int rows_per_node, int local_start_index, int M, MPI_Datatype mpi_datatype,
     double **alpha_out, double **beta_out, double ***v_out, double eta );
 
