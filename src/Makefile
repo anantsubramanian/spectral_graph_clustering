@@ -30,7 +30,7 @@ run_spectral_clustering: spectral_clustering
 	#mpic++ spectral_clustering.cpp utils.cpp graph.cpp lanczos.cpp -o spectral_clustering -L/usr/lib64/atlas-sse3/ -llapack -lcblas -lgfortran
 
 run_spectral_clustering_cuda: spectral_clustering
-	mpirun -np 1 spectral_clustering_cuda ../data/as20000102_row.txt 0 200 > \
+	mpirun -np 1 spectral_clustering_cuda ../data/as20000102_row.txt 2 200 > \
 		spectral_output_csr_1
 
 spectral_clustering: spectral_clustering.cpp lanczos.cpp headers/lanczos.hpp lanczos_cuda.cpp headers/lanczos_cuda.hpp \

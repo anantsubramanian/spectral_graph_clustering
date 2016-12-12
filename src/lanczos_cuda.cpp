@@ -334,14 +334,15 @@ void lanczos_csr_cuda ( T *data, int *row_ptr, int *col_idx, int nnz, int N, int
   {
     // Compute local alpha of the current iteration
     
-    sparse_csr_mdotv<T>(data, row_ptr, col_idx, rows_in_node, v[j], N, scratch);
-    //cudaMemcpy(devPtrCsrData, data, nnz * sizeof(T), cudaMemcpyHostToDevice);
-    //cudaMemcpy(devPtrCsrRowPtr, row_ptr, (rows_per_node+1) * sizeof(int), cudaMemcpyHostToDevice);
-    //cudaMemcpy(devPtrCsrColIdx, col_idx, nnz * sizeof(int), cudaMemcpyHostToDevice);
-    //cudaMemcpy(devPtrVj, v[j], rows_per_node * sizeof(int), cudaMemcpyHostToDevice);
-    //cusparseDcsrmv(cusparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE, rows_per_node, N, nnz, &one, descr,
-        //devPtrCsrData, devPtrCsrRowPtr, devPtrCsrColIdx, devPtrVj, &zero, devPtrScratch);
-    cublasSetVector (rows_in_node, sizeof(T), scratch, 1, devPtrScratch, 1);
+    //sparse_csr_mdotv<T>(data, row_ptr, col_idx, rows_in_node, v[j], N, scratch);
+    cudaMemcpy(devPtrCsrData, data, nnz * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(devPtrCsrRowPtr, row_ptr, (rows_per_node+1) * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(devPtrCsrColIdx, col_idx, nnz * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(devPtrVj, v[j], rows_per_node * sizeof(int), cudaMemcpyHostToDevice);
+    cusparseTcsrmv(cusparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE, rows_per_node, N, nnz, &one, descr,
+        devPtrCsrData, devPtrCsrRowPtr, devPtrCsrColIdx, devPtrVj, &zero, devPtrScratch);
+
+    //cublasSetVector (rows_in_node, sizeof(T), scratch, 1, devPtrScratch, 1); // needed if sparse_csr_mdotv is used
 
     
     //alpha[j] = dense_vdotv<T>(scratch, rows_in_node, v[j] + local_start_index);
