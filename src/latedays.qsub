@@ -13,4 +13,4 @@ NP=$(( NODES * PROCESSORS_PER_NODE ))
 PROGRAM_NAME="./spectral_clustering $INPUT_FILE $MODE $M"
 # Submit the job.  No need to modify this.
 cd $PBS_O_WORKDIR
-mpirun -host $HOSTS -np $NP $PROGRAM_NAME > temp
+mpirun --mca btl_tcp_if_include em1 -host $HOSTS -np $NP $PROGRAM_NAME > temp
