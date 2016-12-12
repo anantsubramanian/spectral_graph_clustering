@@ -297,15 +297,15 @@ void lanczos_csr_cuda (
   cublasHandle_t handle;
   cublasCreate(&handle);
 
-  T *devPtrX , *devPtrScratch, *devPtrNextBeta;
+  T *devPtrX , *devPtrScratch;
   T *devPtrCsrData;
   int *devPtrCsrRowPtr, *devPtrCsrColIdx;
+
   T *devPtrVj;
 
   T devAlpha;
 
-  cudaMalloc( (void**) &devPtrX, rows_in_node * sizeof(T) );	// vector A
-  cudaMalloc( (void**) &devPtrNextBeta, sizeof(T) );
+  cudaMalloc( (void**) &devPtrX, rows_in_node * sizeof(T));	// vector A
 
   // cusparse init
   cusparseHandle_t cusparse_handle = 0;
@@ -446,6 +446,13 @@ void lanczos_csr_cuda (
   for ( int i = 1; i <= M; i++ )
     (*v_out)[i-1] = v[i];
 
+  cudaFree(devPtrX);
+  cudaFree(devPtrScratch);
+  cudaFree(devPtrCsrData);
+  cudaFree(devPtrCsrRowPtr);
+  cudaFree(devPtrCsrColIdx);
+  cudaFree(devPtrVj);
+
   delete dot_prods;
   delete dot_prods_reduced;
   delete v;
@@ -491,20 +498,19 @@ template void lanczos_csr_cuda (
  *   v_out - The produced intermediate orthonormal Lanczos vectors (MxN size)
  */
 template <typename T>
-void lanczos_csc ( T *data, int *col_ptr, int *row_idx, int N, int cols_in_node,
+void lanczos_csc_cuda ( T *data, int *col_ptr, int *row_idx, int N, int cols_in_node,
                    int cols_per_node, int local_start_index, int M,
                    MPI_Datatype mpi_datatype, T **alpha_out, T **beta_out,
                    T ***v_out, T eta )
 {
   int rank, num_tasks;
-
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &num_tasks);
 
   // Determine the square root of the machine precision for re-orthogonalization
   T epsilon = numeric_limits<T>::epsilon();
   T sqrteps = sqrt(epsilon);
-  eta = pow(epsilon, 0.75);
+  eta = pow(epsilon, eta);
 
   // The distributed intermediate vectors v
   int vsize = cols_per_node;
@@ -514,8 +520,8 @@ void lanczos_csc ( T *data, int *col_ptr, int *row_idx, int N, int cols_in_node,
     v[i] = v_data + i*vsize;
 
   // The values in the tri-diagonal matrix, alphas and betas
-  T *alpha = new T[N+1];
-  T *beta = new T[N+1];
+  T *alpha = new T[M+2];
+  T *beta = new T[M+2];
 
   unsigned int seedval;
   if ( rank == MASTER )
@@ -540,7 +546,7 @@ void lanczos_csc ( T *data, int *col_ptr, int *row_idx, int N, int cols_in_node,
   for ( int i = 0; i < cols_in_node; i++ )
     v[1][i] /= sum;
 
-  beta[1] = 0;
+  beta[1] = sum;
 
   // Scratch array for partial results
   T *scratch = new T[N];
@@ -579,7 +585,7 @@ void lanczos_csc ( T *data, int *col_ptr, int *row_idx, int N, int cols_in_node,
 
     // Compute the alpha for this iteration
     // Reduce sum alphas of different nodes to obtain alpha
-    T alpha_local = dense_vdotv<T>(v[j+1], cols_in_node, v[j]+local_start_index);
+    T alpha_local = dense_vdotv<T>(v[j+1], cols_in_node, v[j]);
     MPI_Allreduce(&alpha_local, &alpha[j], 1, mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
 
     // Orthogonalize against past 2 vectors v[j], v[j-1]
@@ -628,13 +634,13 @@ void lanczos_csc ( T *data, int *col_ptr, int *row_idx, int N, int cols_in_node,
   }
 
   // Compute the last remaining alpha[N]
-  sparse_csc_mdotv<T>(data, col_ptr, row_idx, cols_in_node, N, v[N], N, scratch);
+  sparse_csc_mdotv<T>(data, col_ptr, row_idx, cols_in_node, N, v[M], N, scratch);
   for ( int k = 0; k < num_tasks; k++ )
-    MPI_Reduce(scratch + k * cols_per_node, v[N+1], cols_per_node,
+    MPI_Reduce(scratch + k * cols_per_node, v[M+1], cols_per_node,
         mpi_datatype, MPI_SUM, k, MPI_COMM_WORLD);
 
-  T alpha_local = dense_vdotv<T>(v[N+1], cols_in_node, v[N]);
-  MPI_Allreduce(&alpha_local, &alpha[N], 1, mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
+  T alpha_local = dense_vdotv<T>(v[M+1], cols_in_node, v[M]);
+  MPI_Allreduce(&alpha_local, &alpha[M], 1, mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
 
   // Copy the alphas and betas into output variables
   *alpha_out = new T[M+1];
@@ -656,4 +662,16 @@ void lanczos_csc ( T *data, int *col_ptr, int *row_idx, int N, int cols_in_node,
   delete omega_data;
   delete omega;
 }
+
+template void lanczos_csc_cuda (
+    float *data, int *col_ptr, int *row_idx, int N, int cols_in_node,
+    int cols_per_node, int local_start_index, int M,
+    MPI_Datatype mpi_datatype, float **alpha_out, float **beta_out,
+    float ***v_out, float eta );
+
+template void lanczos_csc_cuda (
+    double *data, int *col_ptr, int *row_idx, int N, int cols_in_node,
+    int cols_per_node, int local_start_index, int M,
+    MPI_Datatype mpi_datatype, double **alpha_out, double **beta_out,
+    double ***v_out, double eta );
 
