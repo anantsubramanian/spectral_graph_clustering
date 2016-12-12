@@ -135,7 +135,7 @@ void run_lanczos_csc ( char *input_file, int M, DATATYPE **alpha_out,
 
   double lanczos_start_time = MPI_Wtime();
   // Replace with appropriate call if using different matrix distribution
-  lanczos_csr <DATATYPE> ( data, col_ptr, row_idx, N, cols_in_node, cols_per_node,
+  lanczos_csc <DATATYPE> ( data, col_ptr, row_idx, N, cols_in_node, cols_per_node,
                            local_start_index, M, MPIDATATYPE, &alpha, &beta, &v );
   double lanczos_end_time = MPI_Wtime();
 
@@ -185,6 +185,8 @@ int main ( int argc, char *argv[] )
   DATATYPE **v;
 
   int M = atoi(argv[3]);
+  if ( rank == MASTER )
+    cerr << "Using " << num_tasks << " processors.\n\n";
 
   switch ( argv[2][0] )
   {
