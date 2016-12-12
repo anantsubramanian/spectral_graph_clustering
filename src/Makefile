@@ -16,6 +16,14 @@ run_spectral_clustering: spectral_clustering
 		spectral_output_csc_1
 	mpirun -np 8 spectral_clustering ../data/as20000102_col.txt 1 200 > \
 		spectral_output_csc_8
+	mpirun -np 1 spectral_clustering ../data/Gowalla_200k_nodes_row.txt 0 1500 > \
+		spectral_output_csr_big_1
+	mpirun -np 8 spectral_clustering ../data/Gowalla_200k_nodes_row.txt 0 1500 > \
+		spectral_output_csr_big_8
+	mpirun -np 1 spectral_clustering ../data/Gowalla_200k_nodes_col.txt 1 1500 > \
+		spectral_output_csc_big_1
+	mpirun -np 8 spectral_clustering ../data/Gowalla_200k_nodes_col.txt 1 1500 > \
+		spectral_output_csc_big_8
 
 spectral_clustering: spectral_clustering.cpp lanczos.cpp headers/lanczos.hpp \
 	headers/graph.hpp graph.cpp headers/utils.hpp utils.cpp
@@ -35,7 +43,6 @@ test_construction: test_construction.cpp graph.cpp utils.cpp headers/graph.hpp h
 	mpic++ test_construction.cpp graph.cpp utils.cpp -o test_construction
 
 clean:
-	rm spectral_clustering lanczos_mpi_cuda_csr test_construction spectral_output_csc_1 \
-		spectral_output_csc_8 spectral_output_csr_1 spectral_output_csr_8 latedays.qsub.* \
-		*.o
+	rm spectral_clustering lanczos_mpi_cuda_csr test_construction spectral_output_* \
+		latedays.qsub.* *.o
 

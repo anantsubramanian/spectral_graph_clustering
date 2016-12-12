@@ -133,7 +133,8 @@ bool find_offending_indices ( int j, T **omega, T sqrteps, T eta,
 template <typename T>
 void re_orthogonalize ( T **v, vector<int> &to_reorthogonalize, int local_start_index,
                         int rows_in_node, T **omega, T *scratch, T epsilon, T sqrteps,
-                        int j, MPI_Datatype mpi_datatype, T *beta, int N )
+                        int j, MPI_Datatype mpi_datatype, T *beta, int N, T *dot_prods,
+                        T *dot_prods_reduced )
 {
   // Re-orthogonalize against these range of vectors, performing updates on
   // local parts only. Will synchronize at the end.
@@ -143,14 +144,20 @@ void re_orthogonalize ( T **v, vector<int> &to_reorthogonalize, int local_start_
   for ( int k = 0; k < to_reorthogonalize.size(); k++ )
   {
     int index = to_reorthogonalize[k];
-    T temp;
     T temp_local = dense_vdotv<T>(scratch, rows_in_node, v[index]+local_start_index);
-    MPI_Allreduce(&temp_local, &temp, 1, mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
-    daxpy<T>(
-        v[j+1]+local_start_index, -temp, v[index]+local_start_index,
-        v[j+1]+local_start_index, rows_in_node);
+    dot_prods[k] = temp_local;
     // Update estimate after this vector has been re-normalized
     omega[(j+1)%3][index] = epsilon * random_normal(0.0, 1.5);
+  }
+
+  MPI_Allreduce(dot_prods, dot_prods_reduced,
+      to_reorthogonalize.size(), mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
+  for ( int k = 0; k < to_reorthogonalize.size(); k++ )
+  {
+    int index = to_reorthogonalize[k];
+    daxpy<T>(
+        v[j+1]+local_start_index, -dot_prods_reduced[k], v[index]+local_start_index,
+        v[j+1]+local_start_index, rows_in_node);
   }
 
   if ( to_reorthogonalize.size() > 0 )
@@ -268,6 +275,8 @@ void lanczos_csr ( T *data, int *row_ptr, int *col_idx, int N, int rows_in_node,
   T *scratch = new T[rows_per_node];
   T *omega_data = new T[(M+1) * 3];
   T **omega = new T*[3];
+  T *dot_prods = new T[M];
+  T *dot_prods_reduced = new T[M];
   omega[0] = omega_data;
   omega[1] = omega_data + (M+1);
   omega[2] = omega_data + 2*(M+1);
@@ -320,7 +329,8 @@ void lanczos_csr ( T *data, int *row_ptr, int *col_idx, int N, int rows_in_node,
       prev_reorthogonalized = false;
 
     re_orthogonalize<T> ( v, to_reorthogonalize, local_start_index, rows_in_node,
-                          omega, scratch, epsilon, sqrteps, j, mpi_datatype, beta, N );
+                          omega, scratch, epsilon, sqrteps, j, mpi_datatype, beta, N,
+                          dot_prods, dot_prods_reduced );
 
     // Normalize the vector
     for ( int k = local_start_index; k < local_start_index + rows_in_node; k++ )
@@ -365,6 +375,8 @@ void lanczos_csr ( T *data, int *row_ptr, int *col_idx, int N, int rows_in_node,
   for ( int i = 1; i <= M; i++ )
     (*v_out)[i-1] = v[i];
 
+  delete dot_prods;
+  delete dot_prods_reduced;
   delete v;
   delete alpha;
   delete beta;
@@ -461,6 +473,8 @@ void lanczos_csc ( T *data, int *col_ptr, int *row_idx, int N, int cols_in_node,
 
   // Scratch array for partial results
   T *scratch = new T[N];
+  T *dot_prods = new T[M];
+  T *dot_prods_reduced = new T[M];
   T *omega_data = new T[(M+1) * 3];
   T **omega = new T*[3];
   omega[0] = omega_data;
@@ -526,7 +540,8 @@ void lanczos_csc ( T *data, int *col_ptr, int *row_idx, int N, int cols_in_node,
       prev_reorthogonalized = false;
 
     re_orthogonalize<T> ( v, to_reorthogonalize, 0, cols_in_node, omega, scratch,
-                          epsilon, sqrteps, j, mpi_datatype, beta, N );
+                          epsilon, sqrteps, j, mpi_datatype, beta, N, dot_prods,
+                          dot_prods_reduced );
 
     // Normalize the local portion of the vector
     for ( int k = 0; k < cols_in_node; k++ )
@@ -561,6 +576,8 @@ void lanczos_csc ( T *data, int *col_ptr, int *row_idx, int N, int cols_in_node,
   for ( int i = 1; i <= M; i++ )
     (*v_out)[i-1] = v[i];
 
+  delete dot_prods;
+  delete dot_prods_reduced;
   delete v;
   delete alpha;
   delete beta;
