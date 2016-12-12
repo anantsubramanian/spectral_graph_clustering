@@ -241,8 +241,14 @@ void lanczos_csr_cuda ( T *data, int *row_ptr, int *col_idx, int nnz, int N, int
 
   // The intermediate vectors v
   int vsize = rows_per_node * num_tasks;
-  T *v_data = new T[(M+2) * vsize];
+  //T *v_data = new T[(M+2) * vsize];
+  T *v_data;
+  cudaHostAlloc ( (void**) &v_data, (M+2) * vsize * sizeof(T), cudaHostAllocDefault);	// pinned memory
+
   T **v = new T*[M+2];
+  //T **v;
+  //cudaHostAlloc ( (void**) &v, (M+2) * sizeof(T*), cudaHostAllocDefault);	// pinned memory
+
   for ( int i = 0; i < M+2; ++i )
     v[i] = v_data + i*vsize;
 
