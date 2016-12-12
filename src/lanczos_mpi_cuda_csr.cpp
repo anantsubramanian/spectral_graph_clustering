@@ -197,7 +197,7 @@ int main ( int argc, char* argv[] )
     //}
     //cout << "err_sum" << err_sum<< endl;
 
-    float *devAlpha;
+    float devAlpha;
     cublasSdot(handle, rows_in_node, devPtrScratch, 1, devPtrVj, 1, &alpha[j]);
     //alpha[j] = dense_vdotv<DATATYPE>(scratch, rows_in_node, v[j]);
     
@@ -241,8 +241,8 @@ int main ( int argc, char* argv[] )
     beta[j+1] = sqrt(res);
 
     // Normalize local portion of the vector
-    a = 1/beta[j+1];
-    cublasSscal(handle, rows_in_node, &a, devPtrScratch, 1);
+    devAlpha = 1/beta[j+1];
+    cublasSscal(handle, rows_in_node, &devAlpha, devPtrScratch, 1);
     cublasGetVector (rows_in_node, sizeof(float), devPtrScratch, 1, scratch, 1);
 
     // Gather and form the new array v[j+1] on each node
