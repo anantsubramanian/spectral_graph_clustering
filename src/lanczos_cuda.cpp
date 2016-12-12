@@ -370,20 +370,20 @@ void lanczos_csr_cuda ( T *data, int *row_ptr, int *col_idx, int nnz, int N, int
     start_t = MPI_Wtime();
 #endif
 
-    cublasGetVector (rows_per_node, sizeof(T), devPtrScratch, 1, scratch, 1);
-    //cudaMemcpy(scratch, devPtrScratch, rows_in_node * sizeof(T), cudaMemcpyDeviceToHost);
+    //cublasGetVector (rows_per_node, sizeof(T), devPtrScratch, 1, scratch, 1);
 
 #ifdef CUDA_DEBUG
     cuda_copy_time += MPI_Wtime() - start_t;
 #endif
 
 
-    alpha[j] = dense_vdotv<T>(scratch, rows_in_node, v[j] + local_start_index);
+    //alpha[j] = dense_vdotv<T>(scratch, rows_in_node, v[j] + local_start_index);
 
     //cublasSetVector (rows_in_node, sizeof(T), scratch, 1, devPtrScratch, 1); // needed if sparse_csr_mdotv is used
-    //cublasTdot(handle, rows_in_node, devPtrScratch, 1, devPtrVj+local_start_index,
-               //1, &alpha[j]);
-    //cublasGetVector (rows_in_node, sizeof(T), devPtrScratch, 1, scratch, 1); // needed if sparse_csr_mdotv is used
+    
+    cublasTdot(handle, rows_in_node, devPtrScratch, 1, devPtrVj+local_start_index,
+               1, &alpha[j]);
+    cublasGetVector (rows_in_node, sizeof(T), devPtrScratch, 1, scratch, 1); // needed if sparse_csr_mdotv is used
 
     // Reduce sum alphas of different nodes to obtain alpha, then broadcast it back
     T res;
