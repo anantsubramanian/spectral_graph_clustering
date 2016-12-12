@@ -16,6 +16,7 @@
 #include <cuda.h>
 #include "cusparse.h"
 #include "headers/utils.hpp"
+#include "headers/cu_utils.h"
 #ifndef __GRAPH
   #include "headers/graph.hpp"
 #endif
@@ -134,6 +135,7 @@ int main ( int argc, char* argv[] )
 
 
   float *devPtrX , *devPtrScratch, *devPtrNextBeta;
+  float *devPtrTestScratch;
   float *devPtrCsrData;
   int *devPtrCsrRowPtr, *devPtrCsrColIdx;
   float *devPtrVj;
@@ -163,6 +165,7 @@ int main ( int argc, char* argv[] )
 
   // for scratch vector
   cudaMalloc( (void**) &devPtrScratch, rows_per_node * sizeof(float));		// vector scratch
+  cudaMalloc( (void**) &devPtrTestScratch, rows_per_node * sizeof(float));		// vector scratch
 
 
   // Start main Lanczos loop to compute the tri-diagonal elements, alpha[i] and beta[i]
@@ -177,6 +180,8 @@ int main ( int argc, char* argv[] )
 
     cusparseScsrmv(cusparse_handle, CUSPARSE_OPERATION_NON_TRANSPOSE, rows_per_node, N, nnz, &one, descr,
         devPtrCsrData, devPtrCsrRowPtr, devPtrCsrColIdx, devPtrVj, &zero, devPtrScratch);
+
+    //kernel_wrapper();
 
     //cudaMemcpy(scratch, devPtrScratch, rows_per_node * sizeof(float), cudaMemcpyDeviceToHost);
 
@@ -197,8 +202,20 @@ int main ( int argc, char* argv[] )
     //}
     //cout << "err_sum" << err_sum<< endl;
 
-    float *devAlpha;
-    cublasSdot(handle, rows_in_node, devPtrScratch, 1, devPtrVj, 1, &alpha[j]);
+    float devAlpha;
+    float test_cuda;
+    cublasTdot(handle, rows_in_node, devPtrScratch, 1, devPtrVj, 1, &alpha[j]);
+    //cudaSdot(rows_in_node, devPtrScratch, 1, devPtrVj, 1, &test_cuda);
+    
+    cublasGetVector (rows_in_node, sizeof(float), devPtrScratch, 1, scratch, 1);
+    test_cuda = dense_vdotv<DATATYPE>(scratch, rows_in_node, v[j]);
+    
+
+    //if (test_cuda != alpha[j])
+      //cout << "fuck wrong; test_cuda = " << test_cuda<< " alpha[j] = " << alpha[j] << endl;
+
+    //break;
+
     //alpha[j] = dense_vdotv<DATATYPE>(scratch, rows_in_node, v[j]);
     
     // Reduce sum alphas of different nodes to obtain alpha, then broadcast it back
@@ -213,11 +230,11 @@ int main ( int argc, char* argv[] )
     
     devAlpha = -alpha[j];
     cublasSetVector( rows_in_node, sizeof(float), v[j] + local_start_index, 1, devPtrX, 1);
-    cublasSaxpy(handle, rows_in_node, &devAlpha, devPtrX, 1, devPtrScratch, 1);
+    cublasTaxpy(handle, rows_in_node, &devAlpha, devPtrX, 1, devPtrScratch, 1);
 
     devAlpha = -beta[j];
     cublasSetVector( rows_in_node, sizeof(float), v[j-1] + local_start_index, 1, devPtrX, 1);
-    cublasSaxpy(handle, rows_in_node, &devAlpha, devPtrX, 1, devPtrScratch, 1);
+    cublasTaxpy(handle, rows_in_node, &devAlpha, devPtrX, 1, devPtrScratch, 1);
 
     // copy value of scratch to host 
     cublasGetVector (rows_in_node, sizeof(float), devPtrScratch, 1, scratch, 1);
@@ -232,7 +249,7 @@ int main ( int argc, char* argv[] )
 
 
     // Normalize v[j+1] and store normalization constant as beta[j+1]
-    cublasSdot(handle, rows_in_node, devPtrScratch, 1, devPtrScratch, 1, nextBeta);
+    cublasTdot(handle, rows_in_node, devPtrScratch, 1, devPtrScratch, 1, nextBeta);
     beta[j+1] = *nextBeta;
     
     cudaThreadSynchronize(); // block until the device has completed
@@ -241,9 +258,15 @@ int main ( int argc, char* argv[] )
     beta[j+1] = sqrt(res);
 
     // Normalize local portion of the vector
-    a = 1/beta[j+1];
-    cublasSscal(handle, rows_in_node, &a, devPtrScratch, 1);
+    devAlpha = 1/beta[j+1];
+
+    //cudaMemcpy(devPtrTestScratch, devPtrScratch, rows_in_node*sizeof(float), cudaMemcpyHostToHost);
+    
+    cublasTscal(handle, rows_in_node, &devAlpha, devPtrScratch, 1);
     cublasGetVector (rows_in_node, sizeof(float), devPtrScratch, 1, scratch, 1);
+
+    //cudaSscal(rows_in_node, &devAlpha, devPtrScratch);
+    //cudaMemcpy(scratch, devPtrScratch, rows_in_node*sizeof(float), cudaMemcpyDeviceToHost);
 
     // Gather and form the new array v[j+1] on each node
     MPI_Allgather(scratch, rows_per_node, MPIDATATYPE, v[j+1], rows_per_node,

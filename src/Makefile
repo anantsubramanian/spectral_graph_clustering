@@ -23,10 +23,10 @@ spectral_clustering: spectral_clustering.cpp lanczos.cpp headers/lanczos.hpp \
 
 run_lanczos_mpi_cuda_csr: lanczos_mpi_cuda_csr
 	mpirun -np 1 lanczos_mpi_cuda_csr
-	mpirun -np 8 lanczos_mpi_cuda_csr
+	#mpirun -np 8 lanczos_mpi_cuda_csr
 
 lanczos_mpi_cuda_csr: lanczos_mpi_cuda_csr.cpp graph.cpp utils.cpp headers/graph.hpp headers/utils.hpp
-	nvcc lanczos_mpi_cuda_csr.cpp graph.cpp utils.cpp -L/opt/openmpi/lib -lmpi_cxx -lmpi -libverbs -ldat -lrt -lnsl -lutil -lm -ldl -lm -lrt -lnsl -lutil -lm -ldl -lcublas -lcusparse -I/opt/openmpi/include -o lanczos_mpi_cuda_csr
+	nvcc lanczos_mpi_cuda_csr.cpp graph.cpp utils.cpp cu_utils.cu -L/opt/openmpi/lib -lmpi_cxx -lmpi -libverbs -ldat -lrt -lnsl -lutil -lm -ldl -lm -lrt -lnsl -lutil -lm -ldl -lcublas -lcusparse -I/opt/openmpi/include -o lanczos_mpi_cuda_csr
 
 run_test_construction: test_construction
 	mpirun -np 8 test_construction
