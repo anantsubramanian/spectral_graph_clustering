@@ -27,7 +27,7 @@ bool abs_smaller ( const DATATYPE a, const DATATYPE b )
 int main ( int argc, char *argv[] )
 {
   MPI_Init(&argc, &argv);
-  
+
   int rank, num_tasks;
   double start_time = MPI_Wtime();
 
@@ -70,16 +70,32 @@ int main ( int argc, char *argv[] )
   if ( rank == MASTER )
     cerr << "Lanczos run time: " << lanczos_end_time - lanczos_start_time << "s\n";
 
+  double *eigen_values;
+  double *eigen_vectors;
+  int num_found;
+
   if ( rank == MASTER )
   {
-    double start_qr = MPI_Wtime();
-    qr_eigen ( alpha, beta, M );
-    sort ( alpha, alpha+M, abs_smaller );
-    double end_qr = MPI_Wtime();
-    
-    cerr << "QR run time: " << end_qr - start_qr << "s\n\n";
+    double start_lapack = MPI_Wtime();
+    lapack_eigen ( alpha, beta, M, num_found, &eigen_values, &eigen_vectors );
+    //qr_eigen ( alpha, beta, M );
+    //sort ( alpha_2, alpha_2+M, abs_smaller );
+    double end_lapack = MPI_Wtime();
+
+    cerr << "LAPACK run time: " << end_lapack - start_lapack << "s\n\n";
+    cerr << "Found " << num_found << " eigenvalues and eigenvectors.\n";
     for ( int i = 0; i < M; i++ )
-      cout << alpha[i] << "\n";
+      cout << eigen_values[i] << "\n";
+
+    for ( int i = 0; i < M; i++ )
+    {
+      for ( int j = 0; j < M; j++ )
+        cout << eigen_vectors[i * M + j] << " ";
+      cout << "\n";
+    }
+
+    delete eigen_values;
+    delete eigen_vectors;
   }
 
   delete alpha;

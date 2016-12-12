@@ -29,6 +29,15 @@ void daxpy ( T *result, T a, T *x, T *y, int vec_sizes );
 template <typename T>
 void qr_eigen ( T *alpha, T *beta, int N, const T epsilon = 1e-8 );
 
+extern "C" void dstemr_ ( char *jobz, char *range, int *n, double *alpha, double *beta,
+    double *vl, double *vu, int *il, int *iu, int *m, double *w, double *z, int *ldz,
+    int *nzc, int *isuppz, int *tryrac, double *work, int *lwork, int *iwork,
+    int *liwork, int *info );
+
+extern void lapack_eigen (
+    double *alpha, double *beta, int M, int &M_out,
+    double **eigen_values, double **eigen_vectors );
+
 extern void convert_edgelist_to_csr (
     vector<float> &data, vector<int> &vis, vector<int> &vjs,
     int row_count, int row_base, float** A, int **row_ptr,

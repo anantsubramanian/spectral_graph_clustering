@@ -1,7 +1,7 @@
 default:
 	mpic++ -c test_construction.cpp -o test_construction.o
 	mpic++ -c graph.cpp -o graph.o
-	mpic++ -c utils.cpp -o utils.o 
+	mpic++ -c utils.cpp -o utils.o
 	nvcc -arch=sm_20 -c multiply.cu -o multiply.o
 	mpic++ test_construction.o graph.o utils.o multiply.o -lcudart -L/usr/local/cuda/lib64/ -o test_construction -lcublas
 
@@ -13,7 +13,7 @@ run_spectral_clustering: spectral_clustering
 
 spectral_clustering: spectral_clustering.cpp lanczos.cpp headers/lanczos.hpp \
 	headers/graph.hpp graph.cpp headers/utils.hpp utils.cpp
-	mpic++ spectral_clustering.cpp utils.cpp graph.cpp lanczos.cpp -o spectral_clustering
+	mpic++ spectral_clustering.cpp utils.cpp graph.cpp lanczos.cpp -o spectral_clustering -llapack -lblas -lgfortran
 
 run_lanczos_mpi_cuda_csr: lanczos_mpi_cuda_csr
 	mpirun -np 1 lanczos_mpi_cuda_csr
@@ -30,5 +30,5 @@ test_construction: test_construction.cpp graph.cpp utils.cpp headers/graph.hpp h
 
 clean:
 	rm spectral_clustering lanczos_mpi_cuda_csr test_construction spectral_output_1 \
-		spectral_output_8 latedays.qsub.*
+		spectral_output_8 latedays.qsub.* *.o
 

@@ -207,7 +207,7 @@ void re_orthogonalize ( T **v, vector<int> &to_reorthogonalize, int local_start_
 template <typename T>
 void lanczos_csr ( T *data, int *row_ptr, int *col_idx, int N, int rows_in_node,
                    int rows_per_node, int local_start_index, int M,
-                   MPI_Datatype mpi_datatype, T **alpha_out, T **beta_out, 
+                   MPI_Datatype mpi_datatype, T **alpha_out, T **beta_out,
                    T ***v_out, T eta )
 {
   int rank, num_tasks;
@@ -230,7 +230,7 @@ void lanczos_csr ( T *data, int *row_ptr, int *col_idx, int N, int rows_in_node,
   T **v = new T*[M+2];
   for ( int i = 0; i < M+2; ++i )
     v[i] = v_data + i*vsize;
-  
+
   // The values in the tri-diagonal matrix, alphas and betas
   T *alpha = new T[M+2];
   T *beta = new T[M+2];
@@ -263,7 +263,7 @@ void lanczos_csr ( T *data, int *row_ptr, int *col_idx, int N, int rows_in_node,
     v[1][i] /= sum;
 
   beta[1] = sum;
-  
+
   // Scratch array for partial results
   T *scratch = new T[rows_per_node];
   T *omega_data = new T[(M+1) * 3];
@@ -285,7 +285,7 @@ void lanczos_csr ( T *data, int *row_ptr, int *col_idx, int N, int rows_in_node,
     // Compute local alpha of the current iteration
     sparse_csr_mdotv<T>(data, row_ptr, col_idx, rows_in_node, v[j], N, scratch);
     alpha[j] = dense_vdotv<T>(scratch, rows_in_node, v[j] + local_start_index);
-    
+
     // Reduce sum alphas of different nodes to obtain alpha, then broadcast it back
     T res;
     MPI_Allreduce(&alpha[j], &res, 1, mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
@@ -314,7 +314,7 @@ void lanczos_csr ( T *data, int *row_ptr, int *col_idx, int N, int rows_in_node,
                                     rows_in_node, local_start_index, N );
 
     if ( !prev_reorthogonalized )
-      prev_reorthogonalized = 
+      prev_reorthogonalized =
         find_offending_indices<T> ( j, omega, sqrteps, eta, to_reorthogonalize );
     else
       prev_reorthogonalized = false;
@@ -382,4 +382,209 @@ template void lanczos_csr (
     double *data, int *row_ptr, int *col_idx, int N, int rows_in_node,
     int rows_per_node, int local_start_index, int M, MPI_Datatype mpi_datatype,
     double **alpha_out, double **beta_out, double ***v_out, double eta );
+
+
+/**
+ * Run the Lanczos algorithm with partial re-orthogonalization on a distributed CSC
+ * matrix.
+ *
+ * Inputs:
+ *   data - Data array of CSC matrix
+ *   col_ptr - Column pointers for CSC matrix
+ *   row_idx - Row indices corresponding to 'data'
+ *   N - Total number of rows/columns in the matrix (global)
+ *   columns_in_node - Number of columns present in the local node
+ *   columns_per_node - Ideal number of columns per node (if it was exactly divisible)
+ *   local_start_index - Column that column 0 of this matrix partition corresponds to
+ *   M - Number of iterations to run the Lanczos algorithm for (size of tri-diagonal
+ *       matrix)
+ *   mpi_datatype - The MPI datatype corresponding to T (eg. MPI_DOUBLE)
+ *   eta - Neighbourhood to re-orthogonalize in (0 to 1, 0 = none, 1 = full reorth.)
+ *         (optional)
+ *
+ * Outputs:
+ *   alpha_out - The diagonal elements of the tri-diagonal matrix
+ *   beta_out - The off-diagonal elements of the tri-diagonal matrix
+ *   v_out - The produced intermediate orthonormal Lanczos vectors (MxN size)
+ */
+/*template <typename T>
+void lanczos_csc ( T *data, int *col_ptr, int *row_idx, int N, int cols_in_node,
+                   int cols_per_node, int local_start_index, int M,
+                   MPI_Datatype mpi_datatype, T **alpha_out, T **beta_out,
+                   T ***v_out, T eta )
+{
+  int rank, num_tasks;
+
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  MPI_Comm_size(MPI_COMM_WORLD, &num_tasks);
+
+  // Determine the square root of the machine precision for re-orthogonalization
+  T epsilon = numeric_limits<T>::epsilon();
+  T sqrteps = sqrt(epsilon);
+  T eta = pow(epsilon, 0.75);
+
+  // The distributed intermediate vectors v
+  int vsize = cols_per_node;
+  T *v_data = new T[(M+2) * vsize];
+  T **v = new T*[M+2];
+  for ( int i = 0; i < M+2; i++ )
+    v[i] = v_data + i*vsize;
+
+  // The values in the tri-diagonal matrix, alphas and betas
+  T *alpha = new T[N+1];
+  T *beta = new T[N+1];
+
+  unsigned int seedval;
+  if ( rank == MASTER )
+    seedval = time(NULL);
+  MPI_Bcast(&seedval, 1, MPI_UNSIGNED, MASTER, MPI_COMM_WORLD);
+
+  srand(seedval);
+
+  // Generate the initial normalized vectors v1, and the 0 vector v0
+  T sum = 0.;
+  T sum_local = 0.;
+  for ( int i = 0; i < cols_in_node; i++ )
+  {
+    v[0][i] = 0.;
+    T temp = -0.5 + (rand() / (T) RAND_MAX);
+    v[1][i] = temp;
+    sum_local += temp*temp;
+  }
+  MPI_Allreduce(&sum_local, &sum, 1, mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
+  sum = sqrt(sum);
+
+  for ( int i = 0; i < cols_in_node; i++ )
+    v[1][i] /= sum;
+
+  beta[1] = 0;
+
+  // Scratch array for partial results
+  T *scratch = new T[N];
+  T *omega_data = new T[(M+1) * 3];
+  T **omega = new T*[3];
+  omega[0] = omega_data;
+  omega[1] = omega_data + (M+1);
+  omega[2] = omega_data + 2*(M+1);
+
+  omega[0][0] = 1.0;
+  omega[1][1] = 1.0;
+  omega[1][0] = 0.0;
+
+  vector<int> to_reorthogonalize;
+  bool prev_reorthogonalized = false;
+
+  // Re-seed pseudo random number generator, as the calls to random would have been
+  // different for the last node if N % cols_per_node != 0
+  if ( rank == MASTER )
+    seedval = time(NULL);
+  MPI_Bcast(&seedval, 1, MPI_UNSIGNED, MASTER, MPI_COMM_WORLD);
+  srand(seedval);
+
+  // Start main Lanczos loop to compute the tri-diagonal elements, alpha[i] and beta[i]
+  for ( int j = 1; j < M; j++ )
+  {
+    // Compute the distributed vector v[j+1]
+    sparse_csc_mdotv<T>(data, col_ptr, row_idx, cols_in_node, N, v[j], N, scratch);
+
+    // Reduce sum the corresponding parts of v[j+1] to each node
+    for ( int k = 0; k < num_tasks; k++ )
+      MPI_Reduce(scratch + k * cols_per_node, v[j+1], cols_per_node,
+          mpi_datatype, MPI_SUM, k, MPI_COMM_WORLD);
+
+    // Compute the alpha for this iteration
+    // Reduce sum alphas of different nodes to obtain alpha
+    T alpha_local = dense_vdotv<T>(v[j+1], cols_in_node, v[j]+local_start_index);
+    MPI_Allreduce(&alpha_local, &alpha[j], 1, mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
+
+    // Orthogonalize against past 2 vectors v[j], v[j-1]
+    daxpy<T>(v[j+1], -alpha[j], v[j], v[j+1], cols_in_node);
+    daxpy<T>(v[j+1], -beta[j], v[j-1], v[j+1], cols_in_node);
+
+    // Store normalization constant as beta[j+1]
+    T beta_local = 0.;
+    for ( int k = 0; k < cols_in_node; k++ )
+      beta_local += v[j+1][k]*v[j+1][k];
+    MPI_Allreduce(&beta_local, &beta[j+1], 1, mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
+    beta[j+1] = sqrt(beta[j+1]);
+
+    if ( fabs(beta[j+1] - 0) < EPS )
+    {
+      M = j+1;
+      cerr << "Found an invariant subspace at " << j << "\n";
+    }
+
+    // This will break if debug is enabled.
+    // TODO: Fix this using a flag or separate it out to another function.
+    update_estimate_recurrence<T> ( beta, alpha, omega, j, scratch, epsilon, sqrteps,
+                                    v, cols_in_node, local_start_index, N );
+
+    if ( !prev_reorthogonalized )
+      prev_reorthogonalized =
+        find_offending_indices<T> ( j, omega, sqrteps, eta, to_reorthogonalize );
+    else
+      prev_reorthogonalized = false;
+
+    // Re-orthogonalize against these range of vectors, performing updates on
+    // local parts only. Will synchronize at the end.
+    for ( int k = 0; k < to_reorthogonalize.size(); k++ )
+    {
+      int index = to_reorthogonalize[k];
+      T temp;
+      T temp_local = dense_vdotv<T>(v[j+1], cols_in_node, v[index]);
+      MPI_Allreduce(&temp_local, &temp, 1, mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
+      daxpy<T>(v[j+1], -temp, v[index], v[j+1], cols_in_node);
+      // Update estimate after this vector has been re-normalized
+      omega[j+1][index] = epsilon * random_normal(0, 1.5);
+    }
+
+    if ( to_reorthogonalize.size() > 0 )
+    {
+      // Need to re-normalize v[j+1] and store normalization constant as beta[j+1]
+      beta_local = 0.;
+      for ( int k = 0; k < cols_in_node; k++ )
+        beta_local += v[j+1][k]*v[j+1][k];
+      MPI_Allreduce(&beta_local, &beta[j+1], 1, mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
+      beta[j+1] = sqrt(beta[j+1]);
+
+      // Normalize the local portion of the vector
+      for ( int k = 0; k < cols_in_node; k++ )
+        v[j+1][k] /= beta[j+1];
+    }
+
+    if ( !prev_reorthogonalized )
+      to_reorthogonalize.clear();
+    // End loop for j+1
+  }
+
+  // Compute the last remaining alpha[N]
+  sparse_csc_mdotv<T>(data, col_ptr, row_idx, cols_in_node, N, v[N], N, scratch);
+  for ( int k = 0; k < num_tasks; k++ )
+    MPI_Reduce(scratch + k * cols_per_node, v[N+1], cols_per_node,
+        mpi_datatype, MPI_SUM, k, MPI_COMM_WORLD);
+
+  T alpha_local = dense_vdotv<T>(v[N+1], cols_in_node, v[N]);
+  MPI_Allreduce(&alpha_local, &alpha[N], 1, mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
+
+  double tri_diagonalization_time = MPI_Wtime();
+
+  if ( rank == 0 )
+    for ( int i = 1; i <= N; i++ )
+      cout << alpha[i] << " " << beta[i] << "\n";
+
+  cerr << "Data load time: " << data_load_time - start_time << "\n";
+  cerr << "Initialization time: " << initialization_time - data_load_time << "\n";
+  cerr << "Loop time: " << tri_diagonalization_time - initialization_time << "\n";
+
+  delete v_data;
+  delete v;
+  delete alpha;
+  delete beta;
+  delete scratch;
+  delete omega_data;
+  delete omega;
+
+  MPI_Finalize();
+  return 0;
+}*/
 

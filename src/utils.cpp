@@ -183,6 +183,68 @@ void qr_eigen ( T *alpha, T *beta, int N, const T epsilon )
   }
 }
 
+/**
+ * Interface to the LAPACK tri-diagonal symmetric matrix eigenvalues and
+ * eigenvectors solver.
+ *
+ * Ref: http://www.netlib.org/lapack/explore-3.1.1-html/dstemr.f.html
+ */
+extern "C" void dstemr_ ( char *jobz, char *range, int *n, double *alpha, double *beta,
+    double *vl, double *vu, int *il, int *iu, int *m, double *w, double *z, int *ldz,
+    int *nzc, int *isuppz, int *tryrac, double *work, int *lwork, int *iwork,
+    int *liwork, int *info );
+
+/**
+ * Wrapper around the Fortran function call, to simplify life.
+ *
+ * Inputs:
+ *   alpha - Diagonal elements of the tri-diagonal matrix (will be overwritten)
+ *   beta - Off-diagonal elements (will be overwritten)
+ *   M - Number of desired eigenvalues and vectors
+ *
+ * Outputs:
+ *   M_out - Number of eigenvalues/eigenvectors found
+ *   eigen_values - Sorted list of eigenvalues that were found
+ *   eigen_vectors - The eigenvectors corresponding to the eigenvalues
+ */
+extern void lapack_eigen ( double *alpha, double *beta, int M, int &M_out,
+                           double **eigen_values, double **eigen_vectors )
+{
+  *eigen_values = new double[M];
+  *eigen_vectors = new double[M*M];
+
+  // Stuff Fortran needs
+  int dummy_i;
+  double dummy_d;
+  char job = 'V', range = 'A';
+  int *isuppz = new int[2*M];
+  int tryrac = 0;
+  double *work = new double[18*M];
+  int lwork = 18*M;
+  int *iwork = new int[10*M];
+  int liwork = 10*M;
+  int info;
+  // End stuff Fortran needs
+
+  dstemr_( &job, &range, &M, alpha, beta, &dummy_d, &dummy_d, &dummy_i, &dummy_i,
+           &M_out, *eigen_values, *eigen_vectors, &M, &M, isuppz, &tryrac, work,
+           &lwork, iwork, &liwork, &info );
+
+  if ( info != 0 )
+    std :: cerr << "Error executing LAPACK routine dstemr.\n";
+
+  // Free Fortran workspace variables
+  delete isuppz;
+  delete work;
+  delete iwork;
+
+  // Transpose the eigenvectors, as Fortran stores them in column-major order.
+  // Rows of eigen_vectors will then contain the eigenvectors.
+  for ( int i = 0; i < M; i++ )
+    for ( int j = 0; j < M; j++ )
+      std::swap ( (*eigen_vectors)[i * M + j], (*eigen_vectors)[j * M + i] );
+}
+
 template void convert_edgelist_to_csr (
     vector<float> &data, vector<int> &vis, vector<int> &vjs,
     int row_count, int row_base, float** A, int **row_ptr,
