@@ -9,9 +9,7 @@
 #include "cusparse.h"
 
 
-void cudaSdot(int size, float *vecA, float skipA, float *vecB, float skipB, float *vecResult);
-
-void cudaSscal(int vectorSize, float *alpha, float *vector);
+void cudaTscal(int vectorSize, float *alpha, float *vector);
 
 cublasStatus_t cublasTscal(cublasHandle_t handle, int n, const float *alpha, float *x, int incx);
 
