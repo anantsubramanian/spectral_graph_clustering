@@ -1,66 +1,144 @@
 #include <stdio.h>
 #include "cublas_v2.h"
-/*#include <cublas.h>*/
+#include "headers/cu_utils.h"
 
+using namespace std;
 
-/**
- * Computes a*x + y for two dense vectors x and y.
- */
+#define threadsPerBlock 1024
 
-extern void cu_daxpy( float *result, float a, float *x, float *y, int vec_size )
+__global__ void cuda_Sdot_kernel(int vectorSize, float *vecA, float *vecB, float *vecResult)
 {
-  cudaSetDevice(0);
 
-  /*int i,j;*/
-  float *devPtrX , *devPtrY;
+  __shared__ float cache[threadsPerBlock];
 
-  //timer stuff
-  cudaEvent_t start, stop;
-  cudaEventCreate(&start);
-  cudaEventCreate(&stop);
+  int idx = threadIdx.x + blockIdx.x * blockDim.x;
 
-  /*printf ("\nvecX\n");*/
-  /*for(i=0;i<vec_size;i++) printf("%f ",x[i]);*/
-  /*printf ("\nvecY\n");*/
-  /*for(i=0;i<vec_size;i++) printf("%f ",y[i]);*/
+  int cacheIdx = threadIdx.x;
 
-  /*printf ("\n\n");*/
+  float local_sum = 0;
 
-  cudaMalloc( (void**) &devPtrX, vec_size * sizeof(float));	//matrix A
-  cudaMalloc( (void**) &devPtrY, vec_size * sizeof(float));		//vector B
+  while (idx < vectorSize)
+  {
+    local_sum += vecA[idx] * vecB[idx];
+    idx += blockDim.x * gridDim.x;
+  }
 
-  // transfer host data to device
-  cublasSetVector( vec_size, sizeof(float), x, 1, devPtrX, 1);
-  cublasSetVector( vec_size, sizeof(float), y, 1, devPtrY, 1);
+  cache[cacheIdx] = local_sum;
+  __syncthreads();
 
-  //start timer 
-  cudaEventRecord(start, 0);
+  // reduce
 
-  // do saxpy
-  /*cublasStatus_t stat;*/
-  cublasHandle_t handle;
+  int i = blockDim.x/2;
+  while (i != 0)
+  {
+    if (cacheIdx < i)
+      cache[cacheIdx] += cache[cacheIdx + i];
 
-  cublasCreate(&handle);
+    __syncthreads();
+    i/= 2;
+  }
 
-  cublasSaxpy(handle, vec_size, &a, devPtrX, 1, devPtrY, 1);
-
-  /*// block until the device has completed*/
-  cudaThreadSynchronize();
-
-  //end timer
-  cudaEventRecord(stop, 0);
-  cudaEventSynchronize(stop);
-  float elapsedTime;
-  cudaEventElapsedTime(&elapsedTime, start, stop);		
-
-  cublasGetVector (vec_size, sizeof(float), devPtrY, 1, y, 1);
-
-  /*for (j = 0; j < vec_size; j++) printf ("%7.0f", y[j]);//IDX2C(j,1,M)]);*/
-  /*printf("\n\ntime = %f\n\n",elapsedTime);*/
-
-  cudaEventDestroy(start);
-  cudaEventDestroy(stop);
-
-  result = y;
-
+  if (cacheIdx == 0)
+    vecResult[blockIdx.x] = cache[0];
 }
+
+__global__ void dot_product_kernel(const int N, const float *x, const float *y,
+    float *z) {
+
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    __shared__ float result[threadsPerBlock];
+
+    if (index < N) {
+        result[threadIdx.x] = x[index] * y[index];
+    } else {
+        result[threadIdx.x] = 0;
+    }
+    __syncthreads();
+
+    int half = threadsPerBlock/ 2;
+    while (half > 0) {
+        if (threadIdx.x < half) {
+            result[threadIdx.x] += result[threadIdx.x + half];
+        }
+        __syncthreads();
+        half /= 2;
+    }
+
+    if (threadIdx.x == 0) {
+        z[blockIdx.x] = result[0];
+    }
+}
+
+void cudaSdot(int vectorSize, float *vecA, float skipA, float *vecB, float skipB, float *result)
+{
+   dim3 threads(threadsPerBlock);
+   dim3 blocks(32);
+
+   float *devVecResult;
+   float *vecResult;
+   vecResult = new float[vectorSize];
+   cudaMalloc( (void **) &devVecResult, vectorSize * sizeof(float));
+
+   /*cuda_Sdot_kernel<<< blocks, threads>>>( size, vecA, vecB, devVecResult );*/
+   dot_product_kernel<<< blocks, threads>>>( vectorSize, vecA, vecB, devVecResult );
+
+   cudaMemcpy(vecResult, devVecResult, sizeof(float), cudaMemcpyDeviceToHost);
+
+   *result = 0;
+
+   for (int i = 0; i < vectorSize; i ++)
+     *result+= vecResult[i];
+
+
+   cudaThreadSynchronize();
+}
+
+cublasStatus_t cublasTscal(cublasHandle_t handle, int n, const float *alpha, float *x, int incx)
+{
+    return cublasSscal(handle, n, alpha, x, incx);
+}
+
+
+cublasStatus_t cublasTscal(cublasHandle_t handle, int n, const double *alpha, double *x, int incx)
+{
+    return cublasDscal(handle, n, alpha, x, incx);
+}
+
+__global__ void cuda_Sscal_kernel(int vectorSize, float alpha, float *vector)
+{
+
+  int idx = threadIdx.x + blockIdx.x * blockDim.x;
+
+  if (idx < vectorSize)
+    vector[idx] = alpha * vector[idx];
+}
+
+void cudaSscal(int vectorSize, float *alpha, float *vector)
+{
+   int numBlocks = (vectorSize + threadsPerBlock - 1) / threadsPerBlock;
+
+   cuda_Sscal_kernel<<< numBlocks, threadsPerBlock>>>( vectorSize, *alpha, vector);
+   cudaThreadSynchronize();
+}
+
+
+cublasStatus_t cublasTdot (cublasHandle_t handle, int n, const float *x, int incx, const float *y, int incy, float *result)
+{
+  return cublasSdot (handle, n, x, incx, y, incy, result);
+}
+
+cublasStatus_t cublasTdot (cublasHandle_t handle, int n, const double *x, int incx, const double *y, int incy, double *result)
+{
+  return cublasDdot (handle, n, x, incx, y, incy, result);
+}
+
+cublasStatus_t cublasTaxpy(cublasHandle_t handle, int n, const float *alpha, const float *x, int incx, float *y, int incy)
+{
+  return cublasSaxpy(handle, n, alpha, x, incx, y, incy);
+}
+
+cublasStatus_t cublasTaxpy(cublasHandle_t handle, int n, const double *alpha, const double *x, int incx, double *y, int incy)
+{
+  return cublasDaxpy(handle, n, alpha, x, incx, y, incy);
+}
+
