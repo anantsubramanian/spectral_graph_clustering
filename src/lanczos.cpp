@@ -471,7 +471,7 @@ void lanczos_csc ( T *data, int *col_ptr, int *row_idx, int N, int cols_in_node,
   beta[1] = sum;
 
   // Scratch array for partial results
-  T *scratch = new T[N];
+  T *scratch = new T[cols_per_node * num_tasks];
   T *dot_prods = new T[M];
   T *dot_prods_reduced = new T[M];
   T *omega_data = new T[(M+1) * 3];
@@ -511,13 +511,13 @@ void lanczos_csc ( T *data, int *col_ptr, int *row_idx, int N, int cols_in_node,
     MPI_Allreduce(&alpha_local, &alpha[j], 1, mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
 
     // Orthogonalize against past 2 vectors v[j], v[j-1]
-    daxpy<T>(v[j+1], -alpha[j], v[j], v[j+1], cols_in_node);
-    daxpy<T>(v[j+1], -beta[j], v[j-1], v[j+1], cols_in_node);
+    daxpy<T>(scratch, -alpha[j], v[j], v[j+1], cols_in_node);
+    daxpy<T>(scratch, -beta[j], v[j-1], scratch, cols_in_node);
 
     // Store normalization constant as beta[j+1]
     T beta_local = 0.;
     for ( int k = 0; k < cols_in_node; k++ )
-      beta_local += v[j+1][k]*v[j+1][k];
+      beta_local += scratch[k]*scratch[k];
     MPI_Allreduce(&beta_local, &beta[j+1], 1, mpi_datatype, MPI_SUM, MPI_COMM_WORLD);
     beta[j+1] = sqrt(beta[j+1]);
 

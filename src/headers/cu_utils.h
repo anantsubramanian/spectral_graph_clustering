@@ -45,3 +45,13 @@ cusparseStatus_t cusparseTcsrmv (
     const int *csrRowPtrA, const int *csrColIndA, const double *x, const double *beta,
     double *y );
 
+cusparseStatus_t cusparseTcsr2csc(
+    cusparseHandle_t handle, int m, int n, int nnz, const float *csrVal,
+    const int *csrRowPtr, const int *csrColInd, float *cscVal, int *cscRowInd,
+    int *cscColPtr, cusparseAction_t copyValues, cusparseIndexBase_t idxBase);
+
+cusparseStatus_t cusparseTcsr2csc(
+    cusparseHandle_t handle, int m, int n, int nnz, const double *csrVal,
+    const int *csrRowPtr, const int *csrColInd, double *cscVal, int *cscRowInd,
+    int *cscColPtr, cusparseAction_t copyValues, cusparseIndexBase_t idxBase);
+

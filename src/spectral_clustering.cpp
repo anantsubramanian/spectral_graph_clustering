@@ -61,7 +61,7 @@ void run_lanczos_csr ( char *input_file, int M, DATATYPE **alpha_out,
 }
 
 void run_lanczos_csr_cuda ( char *input_file, int M, DATATYPE **alpha_out,
-                       DATATYPE **beta_out, DATATYPE ***v_out, int rank )
+                            DATATYPE **beta_out, DATATYPE ***v_out, int rank )
 {
   double start_time = MPI_Wtime();
 
@@ -147,6 +147,48 @@ void run_lanczos_csc ( char *input_file, int M, DATATYPE **alpha_out,
   *v_out = v;
 }
 
+void run_lanczos_csc_cuda ( char *input_file, int M, DATATYPE **alpha_out,
+                            DATATYPE **beta_out, DATATYPE ***v_out, int rank )
+{
+  double start_time = MPI_Wtime();
+
+  // Load distributed graph from edgelist file, and construct
+  // the unnormalized Laplacian
+  ifstream fin(input_file);
+  distributed_graph_csc<DATATYPE> *input_graph =
+    create_csc_from_edgelist_file<DATATYPE>(fin);
+  input_graph -> construct_unnormalized_laplacian();
+  input_graph -> free_adjacency_matrix();
+
+  double data_load_time = MPI_Wtime();
+  if ( rank == MASTER )
+    cerr << "Data load time: " << data_load_time - start_time << "s\n";
+
+  // Get distributed Laplacian CSR submatrices
+  DATATYPE *data = input_graph -> get_lap_A();
+  int *col_ptr = input_graph -> get_lap_col_ptr();
+  int *row_idx = input_graph -> get_lap_row_idx();
+  int nnz = input_graph -> get_lap_nnz_local();
+  int N = input_graph -> get_N();
+  int cols_in_node = input_graph -> get_cols_in_node();
+  int cols_per_node = input_graph -> get_cols_per_node();
+  int local_start_index = input_graph -> get_col_start_index();
+
+  DATATYPE *alpha, *beta;
+  DATATYPE **v = new DATATYPE*[M];
+
+  double lanczos_start_time = MPI_Wtime();
+  lanczos_csc_cuda <DATATYPE> ( data, col_ptr, row_idx, nnz, N, cols_in_node, cols_per_node,
+                                local_start_index, M, MPIDATATYPE, &alpha, &beta, &v );
+  double lanczos_end_time = MPI_Wtime();
+
+  if ( rank == MASTER )
+    cerr << "Lanczos run time: " << lanczos_end_time - lanczos_start_time << "s\n";
+
+  *alpha_out = alpha;
+  *beta_out = beta;
+  *v_out = v;
+}
 
 void print_usage()
 {
@@ -195,6 +237,8 @@ int main ( int argc, char *argv[] )
     case '1': run_lanczos_csc ( argv[1], M, &alpha, &beta, &v, rank );
               break;
     case '2': run_lanczos_csr_cuda ( argv[1], M, &alpha, &beta, &v, rank );
+              break;
+    case '3': run_lanczos_csc_cuda ( argv[1], M, &alpha, &beta, &v, rank );
               break;
     default: if ( rank == MASTER ) print_usage();
              MPI_Finalize();

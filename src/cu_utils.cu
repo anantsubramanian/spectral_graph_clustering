@@ -87,8 +87,9 @@ cusparseStatus_t cusparseTcsrmv(
     const int *csrRowPtrA, const int *csrColIndA, const float *x, const float *beta,
     float *y )
 {
-  return cusparseScsrmv(handle, transA, m, n, nnz, alpha, descrA, csrValA, csrRowPtrA,
-                        csrColIndA, x, beta, y);
+  return cusparseScsrmv(
+      handle, transA, m, n, nnz, alpha, descrA, csrValA, csrRowPtrA,
+      csrColIndA, x, beta, y);
 }
 
 cusparseStatus_t cusparseTcsrmv(
@@ -97,7 +98,29 @@ cusparseStatus_t cusparseTcsrmv(
     const int *csrRowPtrA, const int *csrColIndA, const double *x,
     const double *beta, double *y )
 {
-  return cusparseDcsrmv(handle, transA, m, n, nnz, alpha, descrA, csrValA, csrRowPtrA,
-                        csrColIndA, x, beta, y);
+  return cusparseDcsrmv(
+      handle, transA, m, n, nnz, alpha, descrA, csrValA, csrRowPtrA,
+      csrColIndA, x, beta, y);
+}
+
+// Convert CSR/CSC matrix a CSC/CSR matrix resp.
+cusparseStatus_t cusparseTcsr2csc(
+    cusparseHandle_t handle, int m, int n, int nnz, const float *csrVal,
+    const int *csrRowPtr, const int *csrColInd, float *cscVal, int *cscRowInd,
+    int *cscColPtr, cusparseAction_t copyValues, cusparseIndexBase_t idxBase)
+{
+  return cusparseScsr2csc(
+      handle, m, n, nnz, csrVal, csrRowPtr, csrColInd, cscVal, cscRowInd,
+      cscColPtr, copyValues, idxBase);
+}
+
+cusparseStatus_t cusparseTcsr2csc(
+    cusparseHandle_t handle, int m, int n, int nnz, const double *csrVal,
+    const int *csrRowPtr, const int *csrColInd, double *cscVal, int *cscRowInd,
+    int *cscColPtr, cusparseAction_t copyValues, cusparseIndexBase_t idxBase)
+{
+  return cusparseDcsr2csc(
+      handle, m, n, nnz, csrVal, csrRowPtr, csrColInd, cscVal, cscRowInd,
+      cscColPtr, copyValues, idxBase);
 }
 
