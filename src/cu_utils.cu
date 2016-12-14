@@ -5,10 +5,11 @@
 
 using namespace std;
 
-#define threadsPerBlock 1024
+#define threadsPerBlock 1024 // max threads on Tesla K40 GPU
 
-// CUDA a*x kernel
-template<class T>
+// CUDA scaling kernel
+
+template <class T>
 __global__ void cuda_Tscal_kernel (int vectorSize, T alpha, T *vector)
 {
   int idx = threadIdx.x + blockIdx.x * blockDim.x;
@@ -17,7 +18,11 @@ __global__ void cuda_Tscal_kernel (int vectorSize, T alpha, T *vector)
     vector[idx] = alpha * vector[idx];
 }
 
-void cudaTscal (int vectorSize, float *alpha, float *vector)
+// CUDA - Vector scaling wrapper
+// vector = alpha * vector
+
+template <class T>
+void cudaTscal (int vectorSize, T *alpha, T *vector)
 {
   int numBlocks = (vectorSize + threadsPerBlock - 1) / threadsPerBlock;
 
@@ -25,15 +30,10 @@ void cudaTscal (int vectorSize, float *alpha, float *vector)
   cudaThreadSynchronize();
 }
 
-void cudaTscal (int vectorSize, double *alpha, double *vector)
-{
-  int numBlocks = (vectorSize + threadsPerBlock - 1) / threadsPerBlock;
 
-  cuda_Tscal_kernel<double><<< numBlocks, threadsPerBlock>>>( vectorSize, *alpha, vector);
-  cudaThreadSynchronize();
-}
+// cuBLAS - Vector scaling wrappers
+// x = alpha * x; incx - stride, n - number of elements
 
-// cuBLAS scaling
 cublasStatus_t cublasTscal (
     cublasHandle_t handle, int n, const float *alpha, float *x,
     int incx )
@@ -49,7 +49,10 @@ cublasStatus_t cublasTscal (
   return cublasDscal(handle, n, alpha, x, incx);
 }
 
-// cuBLAS dot product
+
+// cuBLAS - Dot product wrapper
+// result = x.y; incx and incy - strides, n - number of elements
+
 cublasStatus_t cublasTdot (
     cublasHandle_t handle, int n, const float *x, int incx, const float *y, int incy,
     float *result )
@@ -65,7 +68,9 @@ cublasStatus_t cublasTdot (
 }
 
 
-// cuBLAS axpy
+// cuBLAS - axpy wrapper
+// y = alpha * x + y; incx and incy - strides, n - number of elements
+
 cublasStatus_t cublasTaxpy (
     cublasHandle_t handle, int n, const float *alpha, const float *x, int incx, float *y,
     int incy )
@@ -80,7 +85,10 @@ cublasStatus_t cublasTaxpy (
   return cublasDaxpy(handle, n, alpha, x, incx, y, incy);
 }
 
-// cuSparse mv
+
+// cuSparse - Sparse CSR Matrix Vector Multiplication wrapper
+// y = alpha * matrixA * x + beta * y; m and n - dimensions, nnz - number of non-zero elements
+
 cusparseStatus_t cusparseTcsrmv(
     cusparseHandle_t handle, cusparseOperation_t transA, int m, int n, int nnz,
     const float *alpha, const cusparseMatDescr_t descrA, const float *csrValA,
@@ -103,7 +111,9 @@ cusparseStatus_t cusparseTcsrmv(
       csrColIndA, x, beta, y);
 }
 
-// Convert CSR/CSC matrix a CSC/CSR matrix resp.
+
+// cuSparse - Convert CSR/CSC matrix a CSC/CSR matrix resp.
+
 cusparseStatus_t cusparseTcsr2csc(
     cusparseHandle_t handle, int m, int n, int nnz, const float *csrVal,
     const int *csrRowPtr, const int *csrColInd, float *cscVal, int *cscRowInd,
